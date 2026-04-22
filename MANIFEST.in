@@ -1,0 +1,5 @@
+include LICENSE
+include README.md
+include CLAUDE.md
+recursive-include student_onboarding/migrations *
+recursive-include student_onboarding/templatetags *

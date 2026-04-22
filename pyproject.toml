@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "myce_student_onboarding"
+version = "0.0.1"
+authors = [
+  { name="Avinash Kadaji", email="avi@canusia.com" },
+]
+description = "MyCE - Per-term student onboarding checklist"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/Canusia/package-student_onboarding"
