@@ -1,5 +1,20 @@
 from django.apps import AppConfig
-from django.dispatch import receiver
+
+from . import handlers
+from .signals import onboarding_event
+
+
+def _bridge(sender, event, student, **kwargs):
+    """Module-level bridge from the generic `onboarding_event` Django signal
+    to the string-keyed handlers registry.
+
+    Kept at module scope (not inside ready()) so the reference is held by
+    the module for the life of the process. Django signals use weak refs
+    by default, so a local function inside ready() gets garbage-collected
+    shortly after ready() returns — and events then silently stop firing.
+    """
+    kwargs.pop('signal', None)
+    handlers.dispatch(event, student=student, **kwargs)
 
 
 class StudentOnboardingConfig(AppConfig):
@@ -9,13 +24,13 @@ class StudentOnboardingConfig(AppConfig):
     name = 'student_onboarding'
 
     def ready(self):
-        from . import handlers
-        from .signals import onboarding_event
-
-        @receiver(onboarding_event, dispatch_uid='student_onboarding.bridge')
-        def _bridge(sender, event, student, **kwargs):
-            kwargs.pop('signal', None)
-            handlers.dispatch(event, student=student, **kwargs)
+        # weak=False is belt-and-suspenders alongside the module-level ref:
+        # guarantees the receiver can never be GC'd out of the signal.
+        onboarding_event.connect(
+            _bridge,
+            dispatch_uid='student_onboarding.bridge',
+            weak=False,
+        )
 
 
 class DevStudentOnboardingConfig(StudentOnboardingConfig):
