@@ -303,6 +303,29 @@ onboarding_event.send(sender=__name__, event=PAYMENT_MADE, student=student)
 
 The new step appears automatically in both partials because both iterate `onboarding.steps.all`. No template edits required.
 
+## Ops runbook
+
+All management commands live under `python manage.py`. Wrap with
+`docker exec -w /app/webapp <django_container>` as appropriate.
+
+| Command | What it does |
+|---|---|
+| `onboarding_doctor [--json] [--expect-event KEY ...]` | Healthcheck: is the bridge attached? are handlers registered? active term? table reachable? Exits non-zero on failure — wire into monitoring. |
+| `onboarding_inspect <id\|email> [--term CODE] [--json]` | Pretty-prints all onboarding rows + steps for a student, with balance surfaced for `pay_tuition`. |
+| `onboarding_dispatch <event_key> --student <id\|email> [--student ...]` | Fires an event for named students. Use `--all [--yes]` for fleet-wide (requires confirmation). Supports `--dry-run`. |
+| `onboarding_complete <id\|email> <step_key> [--status completed\|not_applicable] [--term CODE] [--message "…"]` | Escape hatch — manually sets a step's status when the event pipeline missed a transition. |
+| `seed_onboarding [--dry-run] [--limit N] [--student ID]` | Backfill onboarding rows + pre-mark FERPA / classes / profile based on existing state. Safe to re-run. |
+
+### Typical recovery workflow
+
+1. `onboarding_doctor` to confirm plumbing (no point debugging data if the bridge is down).
+2. `onboarding_inspect <student>` to see the student's current state.
+3. `onboarding_dispatch <event> --student <student>` to replay the missed event, or `onboarding_complete` if you need to force state directly.
+
+## Admin
+
+The app registers both `StudentOnboarding` and `StudentOnboardingStep` in Django admin, with step inlines on the parent, term/status filters, and email/psid search — useful for read-only support access without giving shell.
+
 ## Tests
 
 ```bash
