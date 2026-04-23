@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('cis', '0054_rename_cron_command'),
+        ('cis', '__first__'),
     ]
 
     operations = [
