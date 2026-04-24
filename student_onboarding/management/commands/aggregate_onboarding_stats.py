@@ -33,9 +33,19 @@ class Command(BaseCommand):
                             help='Term id. Defaults to the active term.')
         parser.add_argument('--backfill-from', type=str, default=None,
                             help='ISO date. Loop from here up to --date/today.')
+        parser.add_argument('-t', '--time', type=str, default=None,
+                            help='Scheduled run time (passed by cron_jobs runner, used for telemetry).')
 
     def handle(self, *args, **opts):
         from cis.models.term import Term
+        from cis.signals.crontab import cron_task_started, cron_task_done
+
+        scheduled_time = opts.get('time')
+        if scheduled_time:
+            cron_task_started.send(
+                sender=self.__class__, task=self.__class__,
+                scheduled_time=scheduled_time,
+            )
 
         if opts['term']:
             term = Term.objects.get(id=opts['term'])
@@ -43,6 +53,12 @@ class Command(BaseCommand):
             term = active_term()
         if term is None:
             self.stderr.write(self.style.ERROR('No active term — aborting.'))
+            if scheduled_time:
+                cron_task_done.send(
+                    sender=self.__class__, task=self.__class__,
+                    scheduled_time=scheduled_time,
+                    summary='No active term', detailed_log='{}',
+                )
             return
 
         end_date = datetime.date.fromisoformat(opts['date']) if opts['date'] else datetime.date.today()
@@ -56,9 +72,16 @@ class Command(BaseCommand):
             self._aggregate_for(term, cur)
             cur += datetime.timedelta(days=1)
 
-        self.stdout.write(self.style.SUCCESS(
-            f'Aggregated {(end_date - start_date).days + 1} day(s) for term {term.code}.'
-        ))
+        summary = f'Aggregated {(end_date - start_date).days + 1} day(s) for term {term.code}.'
+        self.stdout.write(self.style.SUCCESS(summary))
+
+        if scheduled_time:
+            cron_task_done.send(
+                sender=self.__class__, task=self.__class__,
+                scheduled_time=scheduled_time,
+                summary=summary,
+                detailed_log='{}',
+            )
 
     def _aggregate_for(self, term, date):
         day_end = timezone.make_aware(datetime.datetime.combine(date, datetime.time.max))
