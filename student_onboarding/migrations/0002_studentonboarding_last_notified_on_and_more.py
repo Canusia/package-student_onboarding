@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('cis', '0055_alter_historicalstudent_ethnicity_and_more'),
+        ('cis', '__first__'),
         ('student_onboarding', '0001_initial'),
     ]
 
