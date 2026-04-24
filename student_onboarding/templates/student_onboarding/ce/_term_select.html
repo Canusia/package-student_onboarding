@@ -1,0 +1,12 @@
+{% comment %}
+  Term filter for an onboarding tab. Caller passes `tab_id` — a unique id for
+  this tab's select. Caller's JS reads `#{{tab_id}}_term` value.
+{% endcomment %}
+<form class="form-inline mb-2 onboarding-term-filter" data-target="{{ tab_id }}">
+    <label class="mr-2">Term:</label>
+    <select id="{{ tab_id }}_term" class="form-control form-control-sm onboarding-term-select">
+        {% for t in terms %}
+            <option value="{{ t.id }}" {% if t.id|stringformat:'s' == onboarding_active_term_id %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+    </select>
+</form>

@@ -1,0 +1,42 @@
+<div class="tab-pane" id="onboarding_timeline">
+    <div class="bg-white border border-top-0 p-3">
+        {% include "student_onboarding/ce/_term_select.html" with tab_id="onboarding_timeline" %}
+        <div class="small text-muted mb-2">
+            Registration window: {{ onboarding_timeline_start|default:"(not set)" }} &rarr; {{ onboarding_timeline_end|default:"(not set)" }}
+        </div>
+        <canvas id="onboarding_timeline_chart" height="120"></canvas>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        $(function () {
+            var chart = null;
+            function apiUrl() {
+                return '/ce/onboarding/api/timeline/?term_id=' + $('#onboarding_timeline_term').val();
+            }
+            function load() {
+                $.getJSON(apiUrl(), function (rows) {
+                    var labels = rows.map(function (r) { return r.date; });
+                    var started = rows.map(function (r) { return r.started_count; });
+                    var completed = rows.map(function (r) { return r.completed_count; });
+                    if (chart) chart.destroy();
+                    chart = new Chart(document.getElementById('onboarding_timeline_chart'), {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                { label: 'Started (cumulative)', data: started, borderColor: '#007bff', fill: false },
+                                { label: 'Completed (cumulative)', data: completed, borderColor: '#28a745', fill: false }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: { y: { beginAtZero: true } }
+                        }
+                    });
+                });
+            }
+            $('a[data-toggle="tab"][href="#onboarding_timeline"]').one('shown.bs.tab', load);
+            $('#onboarding_timeline_term').on('change', load);
+        });
+    </script>
+</div>

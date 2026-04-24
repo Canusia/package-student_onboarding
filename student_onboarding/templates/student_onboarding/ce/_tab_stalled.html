@@ -1,0 +1,63 @@
+<div class="tab-pane" id="onboarding_stalled">
+    <div class="bg-white border border-top-0 p-3">
+        {% include "student_onboarding/ce/_term_select.html" with tab_id="onboarding_stalled" %}
+        <form id="onboarding_stalled_filter" class="form-inline mb-2">
+            <label class="mr-2">Days without progress:</label>
+            <input type="number" min="1" max="365" value="7" id="onboarding_stalled_days" class="form-control form-control-sm" style="width:80px;" />
+        </form>
+        <table id="onboarding_stalled_table" class="table table-striped" style="width:100%">
+            <thead>
+                <tr>
+                    <th>Last Name</th>
+                    <th>First Name</th>
+                    <th>Email</th>
+                    <th>High School</th>
+                    <th>Started</th>
+                    <th>Last Progress</th>
+                    <th>Last Notified</th>
+                    <th>Progress</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+    <script>
+        $(function () {
+            var dt = null;
+            function apiUrl() {
+                var days = $('#onboarding_stalled_days').val() || 7;
+                var term = $('#onboarding_stalled_term').val();
+                return '/ce/onboarding/api/stalled/?days=' + days + '&term_id=' + term;
+            }
+            function load() {
+                if (dt) {
+                    dt.ajax.url(apiUrl()).load();
+                    return;
+                }
+                dt = $('#onboarding_stalled_table').DataTable({
+                    stateSave: true,
+                    ajax: apiUrl(),
+                    pageLength: 50,
+                    order: [[4, 'asc']],
+                    columns: [
+                        { data: 'last_name' },
+                        { data: 'first_name' },
+                        { data: 'email' },
+                        { data: 'highschool' },
+                        { data: 'started_on' },
+                        { data: 'last_step_completed_on' },
+                        { data: 'last_notified_on' },
+                        {
+                            data: 'progress_percent',
+                            render: function (d) {
+                                return d + '%';
+                            }
+                        }
+                    ]
+                });
+            }
+            $('a[data-toggle="tab"][href="#onboarding_stalled"]').one('shown.bs.tab', load);
+            $('#onboarding_stalled_days').on('change', load);
+            $('#onboarding_stalled_term').on('change', load);
+        });
+    </script>
+</div>

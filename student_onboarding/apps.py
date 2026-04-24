@@ -1,4 +1,5 @@
 from django.apps import AppConfig
+from django.db.models.signals import post_migrate
 
 from . import handlers
 from .signals import onboarding_event
@@ -17,6 +18,17 @@ def _bridge(sender, event, student, **kwargs):
     handlers.dispatch(event, student=student, **kwargs)
 
 
+def _register_cron(sender, **kwargs):
+    try:
+        from cis.models.crontab import CronTab
+    except Exception:
+        return
+    CronTab.objects.get_or_create(
+        command='aggregate_onboarding_stats',
+        defaults={'cron': '0 2 * * *'},
+    )
+
+
 class StudentOnboardingConfig(AppConfig):
     """Production config — used when this package is pip-installed as
     `student_onboarding` (top-level)."""
@@ -30,6 +42,12 @@ class StudentOnboardingConfig(AppConfig):
             _bridge,
             dispatch_uid='student_onboarding.bridge',
             weak=False,
+        )
+
+        post_migrate.connect(
+            _register_cron,
+            sender=self,
+            dispatch_uid='student_onboarding.register_cron',
         )
 
 

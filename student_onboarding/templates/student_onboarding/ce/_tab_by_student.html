@@ -1,0 +1,145 @@
+<div class="tab-pane" id="onboarding_by_student">
+    <div class="bg-white border border-top-0 p-3">
+        {% include "student_onboarding/ce/_term_select.html" with tab_id="onboarding_by_student" %}
+        <div class="mb-4" style="height: 260px;">
+            <canvas id="onboarding_by_student_funnel"></canvas>
+        </div>
+        <table id="onboarding_by_student_table" class="table table-striped responsive" style="width:100%">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>Started</th>
+                    <th>Last Name</th>
+                    <th>First Name</th>
+                    <th>Email</th>
+                    <th>High School</th>
+                    <th>Progress</th>
+                    <th>Pending</th>
+                    <th>Last Progress</th>
+                    <th>Last Notified</th>
+                    <th></th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        $(function () {
+            var dt = null;
+            var funnelChart = null;
+            function apiUrl() {
+                return '/ce/onboarding/api/by_student/?format=datatables&term_id=' + $('#onboarding_by_student_term').val();
+            }
+            function funnelUrl() {
+                return '/ce/onboarding/api/funnel/?term_id=' + $('#onboarding_by_student_term').val();
+            }
+            function loadFunnel() {
+                $.getJSON(funnelUrl(), function (rows) {
+                    var labels = rows.map(function (r) { return r.label || r.key; });
+                    var completed = rows.map(function (r) { return r.completed; });
+                    var pending = rows.map(function (r) { return r.pending; });
+                    var na = rows.map(function (r) { return r.not_applicable; });
+                    if (funnelChart) funnelChart.destroy();
+                    funnelChart = new Chart(document.getElementById('onboarding_by_student_funnel'), {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [
+                                { label: 'Completed', data: completed, backgroundColor: '#28a745' },
+                                { label: 'Pending', data: pending, backgroundColor: '#ffc107' },
+                                { label: 'Not Applicable', data: na, backgroundColor: '#6c757d' }
+                            ]
+                        },
+                        options: {
+                            indexAxis: 'y',
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                x: { stacked: true, beginAtZero: true },
+                                y: { stacked: true }
+                            }
+                        }
+                    });
+                });
+            }
+            function init() {
+                loadFunnel();
+                dt = $('#onboarding_by_student_table').DataTable({
+                    stateSave: true,
+                    serverSide: true,
+                    processing: true,
+                    ajax: apiUrl(),
+                    lengthMenu: [30, 50, 100],
+                    order: [[1, 'desc']],
+                    rowId: 'student_id',
+                    columnDefs: [
+                        { orderable: false, className: 'select-checkbox', targets: 0 }
+                    ],
+                    select: { style: 'os', selector: 'td:first-child' },
+                    dom: 'B<"float-left mt-3 mb-3"l><"float-right mt-3"f><"row clear">rt<"row"<"col-6"i><"col-6 float-right"p>>',
+                    buttons: [
+                        {
+                            extend: 'csv', className: 'btn btn-sm btn-primary text-white text-light',
+                            text: '<i class="fas fa-file-csv text-white"></i>&nbsp;CSV',
+                            titleAttr: 'Export Records in Current View to CSV'
+                        },
+                        {
+                            extend: 'print', className: 'btn btn-sm btn-primary text-white text-light',
+                            text: '<i class="fas fa-print text-white"></i>&nbsp;Print',
+                            titleAttr: 'Print Records in Current View'
+                        },
+                        {
+                            className: 'btn btn-sm btn-primary text-white text-light',
+                            text: '<i class="fa fa-envelope text-white"></i>&nbsp;Send Verification Link',
+                            titleAttr: 'Send Verification Link',
+                            action: function (e, d) {
+                                ActionRegistry.doBulkAction(student_bulk_actions_url, 'resend_verification_link', d);
+                            }
+                        },
+                        {
+                            className: 'btn btn-sm btn-primary text-white text-light',
+                            text: '<i class="fa fa-link text-white"></i>&nbsp;Get Verification Link',
+                            titleAttr: 'Get Verification Link',
+                            action: function (e, d) {
+                                ActionRegistry.doBulkAction(student_bulk_actions_url, 'get_verification_link', d);
+                            }
+                        }
+                    ],
+                    columns: [
+                        { data: null, defaultContent: '', orderable: false, searchable: false },
+                        { data: 'started_on', name: 'started_on' },
+                        { data: 'last_name', name: 'student.user.last_name' },
+                        { data: 'first_name', name: 'student.user.first_name' },
+                        { data: 'email', name: 'student.user.email' },
+                        { data: 'highschool', name: 'student.highschool.name' },
+                        {
+                            data: 'progress_percent', name: 'completed_steps',
+                            render: function (d, type, row) {
+                                return '<div class="progress" style="min-width:80px;"><div class="progress-bar" style="width:' + d + '%;">' + d + '%</div></div>';
+                            }
+                        },
+                        {
+                            data: 'pending_steps', orderable: false, searchable: false,
+                            render: function (d) {
+                                return (d || []).join(', ');
+                            }
+                        },
+                        { data: 'last_step_completed_on', orderable: false, searchable: false },
+                        { data: 'last_notified_on', name: 'last_notified_on' },
+                        {
+                            data: 'student_id', orderable: false, searchable: false,
+                            render: function (d) {
+                                return "<a class='btn btn-sm btn-primary record-details' refresh-target='table' href='/ce/student/" + d + "'>View Details</a>";
+                            }
+                        }
+                    ]
+                });
+            }
+            $('a[data-toggle="tab"][href="#onboarding_by_student"]').one('shown.bs.tab', init);
+            $('#onboarding_by_student_term').on('change', function () {
+                loadFunnel();
+                if (dt) dt.ajax.url(apiUrl()).load();
+            });
+        });
+    </script>
+</div>

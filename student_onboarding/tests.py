@@ -129,8 +129,8 @@ class OnboardingSignalReceiverTests(TestCase):
         _send(events.APPLICATION_STARTED, self.student)
         onboarding = StudentOnboarding.objects.get(student=self.student, term=self.term)
         keys = set(onboarding.steps.values_list('key', flat=True))
-        # First-timer (no prior data) — verify_info is omitted
-        self.assertEqual(keys, {'ferpa', 'classes'})
+        # First-timer (unverified email, no prior data) — verify_info is omitted
+        self.assertEqual(keys, {'verify_email', 'ferpa', 'classes', 'student_agreement'})
 
     def test_ferpa_completed_marks_step_done(self):
         _send(events.APPLICATION_STARTED, self.student)
