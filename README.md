@@ -218,6 +218,48 @@ These live in the host's student portal app (`webapp/student/templates/student/p
 
 Both iterate `onboarding.steps.all`, so new registered steps appear with no template edits.
 
+**Guard empty `url_name`.** A `StepDefinition` may intentionally have no `url_name` (e.g. a purely informational step, or one handled via a modal). `{% url "" %}` raises `NoReverseMatch`, so wrap the link with an `{% if step.url_name %}` in both partials:
+
+```django
+{# _term_progress.html #}
+{% if step.url_name %}
+    <a href="{% url step.url_name %}" class="d-flex align-items-center …">
+        <span class="font-weight-bold">{{ step.label }}</span>
+        <span class="badge badge-warning ml-auto">Pending</span>
+    </a>
+{% else %}
+    <div class="d-flex align-items-center …">
+        <span class="font-weight-bold">{{ step.label }}</span>
+        <span class="badge badge-warning ml-auto">Pending</span>
+    </div>
+{% endif %}
+```
+
+```django
+{# _term_step_nav.html #}
+<li class="{% step_nav_class step current_task %}">
+    {% if step.url_name %}
+        <a href="{% url step.url_name %}">{{ step.label }}</a>
+    {% else %}
+        <span>{{ step.label }}</span>
+    {% endif %}
+</li>
+```
+
+### Step 7b — Existing-row URL backfill (upgrades only)
+
+`api.add_step` is idempotent on `(student, term, key)` — it uses `get_or_create(..., defaults={...})`. That means changing a `StepDefinition.url_name` in code **does not update existing `StudentOnboardingStep` rows**; only newly-seeded ones get the new value. After changing or first-adding a `url_name` on an existing step, run a one-shot update:
+
+```bash
+docker exec -w /app/webapp django_web_ewu python manage.py shell -c "
+from student_onboarding.models import StudentOnboardingStep
+StudentOnboardingStep.objects.filter(key='verify_email', url_name='').update(url_name='student:awaiting_verification')
+StudentOnboardingStep.objects.filter(key='student_agreement', url_name='').update(url_name='student:classes')
+"
+```
+
+Same pattern applies when you change a step's `label` — existing rows keep the old label until you update them.
+
 ### Step 8 — Add the CE staff tabs to `cis/students/index.html`
 
 The staff tabs are shipped as partials inside this package at `templates/student_onboarding/ce/`. The host page just `{% include %}`s them. In MyCE this means two small edits to `webapp/cis/templates/cis/students/index.html`:
