@@ -4,3 +4,5 @@ include CLAUDE.md
 recursive-include student_onboarding/migrations *
 recursive-include student_onboarding/templatetags *
 recursive-include student_onboarding/management *
+recursive-include student_onboarding/templates *
+recursive-include student_onboarding/settings *
