@@ -120,7 +120,7 @@ class OnboardingSignalReceiverTests(TestCase):
         active_term_patcher.start()
         self.addCleanup(active_term_patcher.stop)
         cis_active_patcher = patch(
-            'cis.signals.onboarding.active_term', return_value=self.term
+            'myce_tenant_configs.services.onboarding_steps.active_term', return_value=self.term
         )
         cis_active_patcher.start()
         self.addCleanup(cis_active_patcher.stop)
@@ -156,7 +156,7 @@ class OnboardingSignalReceiverTests(TestCase):
         # Simulate term rollover by patching active_term to a new term
         new_term = _make_term('T3')
         with patch('student_onboarding.student_onboarding.api.active_term', return_value=new_term), \
-             patch('cis.signals.onboarding.active_term', return_value=new_term):
+             patch('myce_tenant_configs.services.onboarding_steps.active_term', return_value=new_term):
             request = RequestFactory().get('/', HTTP_USER_AGENT='test-agent')
             user_logged_in.send(
                 sender=CustomUser, request=request, user=self.student.user

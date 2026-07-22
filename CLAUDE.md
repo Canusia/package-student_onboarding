@@ -55,7 +55,7 @@ Infrastructure for a per-term onboarding checklist:
 - **Context processor** — `onboarding` is injected into every authenticated student request.
 - **Notification job** — `notify_pending_onboarding` walks pending steps and emails students based on admin settings.
 - **CE staff DRF endpoints + templates** — `/ce/onboarding/api/…` viewsets and the five tab partials under `templates/student_onboarding/ce/`.
-- **No domain knowledge** — FERPA / classes / TA / agreement predicates live in `cis/signals/onboarding.py`, not here.
+- **No domain knowledge** — FERPA / classes / TA / agreement predicates live in `myce_tenant_configs.services.onboarding_steps`, not here.
 
 ## What this app is NOT
 
@@ -87,7 +87,7 @@ Infrastructure for a per-term onboarding checklist:
 | `complete_message` | stamped onto the step when the matching event fires |
 | `notify_label` | non-empty = admin can toggle email notifications for this step on `/ce/settings/…/student_regis_pending/` |
 
-When adding a step, **the only file you should need to edit is the host app's `cis/signals/onboarding.py`** (or equivalent). Nothing in `student_onboarding` itself should hardcode step keys.
+When adding a step, **the only file you should need to edit is the host app's `myce_tenant_configs.services.onboarding_steps`** (or equivalent). Nothing in `student_onboarding` itself should hardcode step keys.
 
 ## Settings form
 
@@ -121,7 +121,7 @@ When adding a step, **the only file you should need to edit is the host app's `c
 
 ## Returning-student detection
 
-`cis/signals/onboarding._is_returning(student)` — true if the student has any `StudentRegistration` outside the current term, or any prior `StudentOnboarding`. Used as the `seeded_when` predicate on `verify_info`. Tighten it in cis, not here.
+`myce_tenant_configs.services.onboarding_steps._is_returning(student)` — true if the student has any `StudentRegistration` outside the current term, or any prior `StudentOnboarding`. Used as the `seeded_when` predicate on `verify_info`. Tighten it in `myce_tenant_configs`, not here.
 
 ## Term rollover
 
@@ -135,7 +135,7 @@ docker exec -w /app/webapp django_web_ewu python manage.py test student_onboardi
 
 The container working directory is `/app/webapp` (the `webapp/manage.py` form in the repo CLAUDE.md is wrong for this container — use `-w /app/webapp` and `python manage.py ...`).
 
-When patching `active_term` in tests, patch the **inner** path `student_onboarding.student_onboarding.api.active_term` (and `cis.signals.onboarding.active_term` separately).
+When patching `active_term` in tests, patch the **inner** path `student_onboarding.student_onboarding.api.active_term` (and `myce_tenant_configs.services.onboarding_steps.active_term` separately).
 
 Mocking the `user_logged_in` signal in tests must include `HTTP_USER_AGENT` on the request because `django_login_history` reads it.
 
