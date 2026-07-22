@@ -1,5 +1,5 @@
 import uuid
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from django.contrib.auth.models import Group
 from django.contrib.auth.signals import user_logged_in
@@ -200,3 +200,70 @@ class StepDefinitionNotifyActionTests(TestCase):
     def test_notify_action_defaults_none(self):
         from student_onboarding.step_registry import StepDefinition
         self.assertIsNone(StepDefinition(key='x', label='X').notify_action)
+
+
+class NotifyActionTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        cls.term = _make_term('NA1')
+
+    def setUp(self):
+        self.student = Student.objects.create(user=_make_user())
+        p = patch('student_onboarding.student_onboarding.api.active_term',
+                  return_value=self.term)
+        p.start(); self.addCleanup(p.stop)
+        p2 = patch('student_onboarding.student_onboarding.management.commands.'
+                   'notify_pending_onboarding.active_term', return_value=self.term)
+        p2.start(); self.addCleanup(p2.stop)
+
+    def _register_step(self, action):
+        from student_onboarding.step_registry import StepDefinition, register, _registry
+        register(StepDefinition(key='demo_notify', label='Demo', notify_action=action))
+        self.addCleanup(lambda: _registry.pop('demo_notify', None))
+
+    def _config(self, missing_items):
+        return {
+            'is_active': 'Debug',
+            'freq': '3',
+            'missing_items': missing_items,
+            'notify_address': 'staff@example.com',
+            'pending_app_email_subject': 'S',
+            'pending_app_email': 'body',
+            'add_note': 'No',
+        }
+
+    def _run_cmd(self, dry_run, missing_items):
+        from student_onboarding.student_onboarding.management.commands.\
+            notify_pending_onboarding import Command
+        fake_settings = MagicMock()
+        fake_settings.from_db.return_value = self._config(missing_items)
+        return Command()._run(
+            student_regis_pending=fake_settings,
+            send_html_mail=MagicMock(),
+            dry_run=dry_run,
+            only_student=str(self.student.id),
+        )
+
+    def test_notify_action_fires_when_step_selected(self):
+        action = MagicMock()
+        self._register_step(action)
+        api.add_step(self.student, key='demo_notify', label='Demo')
+        self._run_cmd(dry_run=False, missing_items=['demo_notify'])
+        action.assert_called_once_with(self.student, self.term)
+
+    def test_notify_action_not_fired_on_dry_run(self):
+        action = MagicMock()
+        self._register_step(action)
+        api.add_step(self.student, key='demo_notify', label='Demo')
+        self._run_cmd(dry_run=True, missing_items=['demo_notify'])
+        action.assert_not_called()
+
+    def test_notify_action_not_fired_when_step_not_selected(self):
+        # Empty missing_items => generic email still sends, but notify_action
+        # must NOT fire on the empty-list default.
+        action = MagicMock()
+        self._register_step(action)
+        api.add_step(self.student, key='demo_notify', label='Demo')
+        self._run_cmd(dry_run=False, missing_items=[])
+        action.assert_not_called()

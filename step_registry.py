@@ -5,4 +5,5 @@ from student_onboarding.student_onboarding.step_registry import (  # noqa: F401
     all_steps,
     get,
     notifiable_steps,
+    _registry,
 )

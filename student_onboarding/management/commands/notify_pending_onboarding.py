@@ -25,6 +25,7 @@ from cis.signals.crontab import cron_task_started, cron_task_done
 from cis.utils import active_term
 
 from ...models import StudentOnboarding, StudentOnboardingStep
+from ...step_registry import get as get_step
 
 
 # Legacy `missing_items` values → step keys. Old saved settings used these
@@ -181,6 +182,17 @@ class Command(BaseCommand):
                 )
                 onboarding.last_notified_on = timezone.now()
                 onboarding.save(update_fields=['last_notified_on'])
+                for step in pending:
+                    # notify_action requires the step to be explicitly selected
+                    # in missing_items — never fire on the empty-list default.
+                    if step.key not in allowed_step_keys:
+                        continue
+                    step_def = get_step(step.key)
+                    if step_def and step_def.notify_action:
+                        try:
+                            step_def.notify_action(student, term)
+                        except Exception:
+                            pass
                 if add_note:
                     try:
                         student.add_note(None, 'Sent pending onboarding reminder - ' + ','.join(issues))
@@ -193,7 +205,6 @@ class Command(BaseCommand):
 
         log['by_step'] = dict(by_step)
 
-        from student_onboarding.step_registry import get as get_step
         def _label(key):
             step = get_step(key)
             return step.label if step else key
