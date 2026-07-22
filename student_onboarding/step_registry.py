@@ -29,6 +29,11 @@ class StepDefinition:
     # Short description shown on the admin notification settings page. If blank,
     # the step is not offered as a notification option.
     notify_label: str = ''
+    # Optional side effect fired by the pending-onboarding notifier when this
+    # step is pending for a student. Signature: fn(student, term) -> None.
+    # Keeps domain-specific notifications (e.g. parent consent) out of the
+    # generic notifier — the callable lives in the tenant catalog.
+    notify_action: Optional[Callable] = None
 
 
 _registry: Dict[str, StepDefinition] = {}

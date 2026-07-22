@@ -188,3 +188,15 @@ class OnboardingSignalReceiverTests(TestCase):
             key='verify_info',
         )
         self.assertEqual(step.status, 'completed')
+
+
+class StepDefinitionNotifyActionTests(TestCase):
+    def test_accepts_notify_action(self):
+        from student_onboarding.step_registry import StepDefinition
+        fn = lambda student, term: None
+        step = StepDefinition(key='x', label='X', notify_action=fn)
+        self.assertIs(step.notify_action, fn)
+
+    def test_notify_action_defaults_none(self):
+        from student_onboarding.step_registry import StepDefinition
+        self.assertIsNone(StepDefinition(key='x', label='X').notify_action)
