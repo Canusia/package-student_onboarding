@@ -196,3 +196,63 @@ class OnboardingFunnelView(views.APIView):
             .order_by('key')
         )
         return Response(list(rows))
+
+
+def pending_notification_detail(request, student_id):
+    """CE page for one student: what the onboarding reminder would say, why
+    they would or would not receive it, and a Send Now button.
+
+    Rendered inside the shared details iframe/modal, so it extends the modal
+    base. Reached from the list page's View Details button and from the
+    Onboarding Reminder action on the student record.
+    """
+    from django.contrib import messages
+    from django.shortcuts import get_object_or_404, redirect, render
+    from django.urls import reverse
+
+    from cis.models.student import Student
+
+    from . import services
+
+    student = get_object_or_404(Student, pk=student_id)
+    term = _resolve_term(request)
+
+    if request.method == 'POST':
+        plan = services.build_plan(
+            term=term, only_student=str(student_id),
+            ignore_rate_limit=True, force=True,
+        )
+        if isinstance(plan, str):
+            messages.warning(request, plan)
+        elif not plan.sendable:
+            messages.warning(
+                request,
+                'Nothing to send - this student has no pending item selected '
+                'for notification, or no valid email address.',
+            )
+        else:
+            services.send_notifications(
+                plan.sendable, config=plan.config, term=plan.term)
+            messages.success(request, 'Reminder sent.')
+        return redirect(reverse(
+            'student_onboarding_ce:pending_notification_detail',
+            args=[student_id]))
+
+    plan = services.build_plan(
+        term=term, only_student=str(student_id), force=True)
+    skip_reason = plan if isinstance(plan, str) else None
+    row = None if skip_reason else (plan.rows[0] if plan.rows else None)
+
+    return render(
+        request, 'student_onboarding/ce/pending_notification_detail.html', {
+            'page_title': 'Onboarding Reminder',
+            'student': student,
+            'row': row,
+            'term': term,
+            'skip_reason': skip_reason,
+            'debug_mode': False if skip_reason else plan.debug_mode,
+            'job_disabled': (
+                False if skip_reason
+                else plan.config.get('is_active', 'No') == 'No'
+            ),
+        })

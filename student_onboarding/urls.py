@@ -2,8 +2,11 @@
 
 Mounted from myce/urls.py at `/ce/onboarding/`.
 """
+from django.contrib.auth.decorators import user_passes_test
 from django.urls import path, include
 from rest_framework import routers
+
+from cis.utils import user_has_cis_role
 
 from .views import (
     OnboardingByStudentViewSet,
@@ -11,6 +14,7 @@ from .views import (
     OnboardingStalledView,
     OnboardingTimelineView,
     OnboardingFunnelView,
+    pending_notification_detail,
 )
 
 app_name = 'student_onboarding_ce'
@@ -24,4 +28,10 @@ urlpatterns = [
     path('api/stalled/', OnboardingStalledView.as_view(), name='stalled'),
     path('api/timeline/', OnboardingTimelineView.as_view(), name='timeline'),
     path('api/funnel/', OnboardingFunnelView.as_view(), name='funnel'),
+    path(
+        'notifications/pending/<uuid:student_id>/',
+        user_passes_test(user_has_cis_role, login_url='/')(
+            pending_notification_detail),
+        name='pending_notification_detail',
+    ),
 ]

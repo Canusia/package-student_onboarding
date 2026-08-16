@@ -1,0 +1,90 @@
+{% extends "cis/logged-base-modal.html" %}
+{% block title %}{{ page_title }}{% endblock %}
+
+{% block body %}
+<main>
+    <h1 class="h4 mb-3 text-gray-800">
+        {{ page_title }} - {{ student.user.first_name }} {{ student.user.last_name }}
+    </h1>
+
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+
+    {% if skip_reason %}
+        <div class="alert alert-warning">{{ skip_reason }}</div>
+    {% elif not row %}
+        <div class="alert alert-info">
+            This student has no incomplete onboarding record for {{ term }}.
+        </div>
+    {% else %}
+        {% if job_disabled %}
+            <div class="alert alert-warning">
+                The scheduled reminder job is turned off. Nothing will be sent
+                automatically - you can still send this one by hand below.
+            </div>
+        {% endif %}
+        {% if debug_mode %}
+            <div class="alert alert-warning">
+                Debug mode is on - this reminder goes to the notification
+                address, not to the student.
+            </div>
+        {% endif %}
+
+        <div class="card mb-3">
+            <div class="card-body">
+                <p class="mb-2"><strong>Status:</strong> {{ row.decision_label }}</p>
+                <p class="mb-2">
+                    <strong>Recipients:</strong>
+                    {% if row.to_email %}
+                        {% for address in row.to_email %}
+                            {{ address }}{% if not forloop.last %}, {% endif %}
+                        {% endfor %}
+                    {% else %}
+                        <span class="text-muted">-</span>
+                    {% endif %}
+                </p>
+                <p class="mb-2">
+                    <strong>Last notified:</strong>
+                    {{ row.last_notified_on|default:"Never" }}
+                </p>
+                {% if row.next_eligible_on %}
+                    <p class="mb-2">
+                        <strong>Next eligible:</strong> {{ row.next_eligible_on }}
+                    </p>
+                {% endif %}
+                <p class="mb-0">
+                    <strong>Pending items:</strong>
+                    {% if row.missing_items %}
+                        {% for item in row.missing_items %}
+                            <span class="badge badge-secondary d-block mb-1">{{ item }}</span>
+                        {% endfor %}
+                    {% else %}
+                        <span class="text-muted">-</span>
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+
+        {% if row.subject %}
+            <div class="card mb-3">
+                <div class="card-body">
+                    <p class="mb-2"><strong>Subject:</strong> {{ row.subject }}</p>
+                    <hr>
+                    {{ row.body|safe }}
+                </div>
+            </div>
+        {% endif %}
+
+        <form method="post">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-primary">Send Now</button>
+            <span class="text-muted ml-2">
+                Sends immediately, ignoring the reminder frequency setting.
+            </span>
+        </form>
+    {% endif %}
+</main>
+{% endblock %}

@@ -1,9 +1,11 @@
+import datetime
 import uuid
 from unittest.mock import patch, MagicMock
 
 from django.contrib.auth.models import Group
 from django.contrib.auth.signals import user_logged_in
 from django.test import TestCase, RequestFactory
+from django.urls import reverse
 from django.utils import timezone
 
 from cis.models.customuser import CustomUser
@@ -13,6 +15,11 @@ from cis.models.student import Student
 from student_onboarding import api, events
 from student_onboarding.models import StudentOnboarding, StudentOnboardingStep
 from student_onboarding.signals import onboarding_event
+
+try:
+    from django_login_history.models import post_login as _login_history_post_login
+except Exception:
+    _login_history_post_login = None
 
 
 def _send(event, student):
@@ -587,4 +594,123 @@ class NotifyCommandSummaryTests(TestCase):
                    return_value=None):
             summary, log = self._run()
         self.assertEqual(summary, 'No active term. Skipped.')
-        self.assertEqual(log, {})
+
+
+class PendingNotificationDetailViewTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if _login_history_post_login is not None:
+            user_logged_in.disconnect(_login_history_post_login)
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        if _login_history_post_login is not None:
+            user_logged_in.connect(_login_history_post_login)
+
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        Group.objects.get_or_create(name='ce')
+        cls.term = _make_term('PD1')
+
+    def setUp(self):
+        self.student = Student.objects.create(user=_make_user())
+        p = patch('student_onboarding.student_onboarding.api.active_term',
+                  return_value=self.term)
+        p.start(); self.addCleanup(p.stop)
+        p2 = patch('student_onboarding.student_onboarding.views.active_term',
+                   return_value=self.term)
+        p2.start(); self.addCleanup(p2.stop)
+
+        self.staff = _make_user(email=f'ce-{uuid.uuid4()}@example.com')
+        self.staff.groups.add(Group.objects.get(name='ce'))
+        self.client.force_login(self.staff)
+
+        self.config = {
+            'is_active': 'Debug',
+            'freq': '3',
+            'missing_items': ['ferpa'],
+            'notify_address': 'staff@example.com',
+            'pending_app_email_subject': 'Finish up',
+            'pending_app_email': 'Hi {{student_first_name}}: {{missing_items}}',
+            'add_note': 'No',
+        }
+        p3 = patch('student_onboarding.student_onboarding.services._load_config',
+                   side_effect=lambda settings_form=None: self.config)
+        p3.start(); self.addCleanup(p3.stop)
+
+    def _url(self):
+        return reverse('student_onboarding_ce:pending_notification_detail',
+                       args=[self.student.id])
+
+    def test_shows_rendered_email_for_a_sendable_student(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['row'].decision, services.DECISION_SEND)
+        self.assertContains(response, 'Finish up')
+        self.assertContains(response, 'FERPA')
+
+    def test_explains_why_a_rate_limited_student_is_excluded(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        onboarding = StudentOnboarding.objects.get(
+            student=self.student, term=self.term)
+        onboarding.last_notified_on = timezone.now()
+        onboarding.save(update_fields=['last_notified_on'])
+        response = self.client.get(self._url())
+        self.assertEqual(response.context['row'].decision,
+                         services.DECISION_RATE_LIMITED)
+        self.assertIsNotNone(response.context['row'].next_eligible_on)
+
+    def test_no_onboarding_record_renders_without_a_row(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context['row'])
+
+    def test_send_now_sends_and_stamps_even_when_rate_limited(self):
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        onboarding = StudentOnboarding.objects.get(
+            student=self.student, term=self.term)
+        onboarding.last_notified_on = timezone.now() - datetime.timedelta(hours=1)
+        onboarding.save(update_fields=['last_notified_on'])
+        before = onboarding.last_notified_on
+
+        with patch('student_onboarding.student_onboarding.services'
+                   '.send_notifications') as mock_send:
+            mock_send.return_value = {'sent': [{'student_id': str(self.student.id)}],
+                                      'by_step': {'ferpa': 1}}
+            response = self.client.post(self._url(), follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_send.call_count, 1)
+        rows_sent = mock_send.call_args.args[0]
+        self.assertEqual(len(rows_sent), 1)
+        self.assertEqual(str(rows_sent[0].student.id), str(self.student.id))
+        self.assertEqual(before, StudentOnboarding.objects.get(
+            student=self.student, term=self.term).last_notified_on)
+
+    def test_send_now_really_sends_when_not_mocked(self):
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        with patch('student_onboarding.student_onboarding.services'
+                   '.send_html_mail', create=True):
+            with patch('mailer.send_html_mail') as mailer:
+                self.client.post(self._url(), follow=True)
+        onboarding = StudentOnboarding.objects.get(
+            student=self.student, term=self.term)
+        self.assertIsNotNone(onboarding.last_notified_on)
+        mailer.assert_called_once()
+
+    def test_send_now_does_nothing_when_student_has_no_pending_items(self):
+        with patch('student_onboarding.student_onboarding.services'
+                   '.send_notifications') as mock_send:
+            self.client.post(self._url(), follow=True)
+        mock_send.assert_not_called()
+
+    def test_anonymous_is_redirected(self):
+        self.client.logout()
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 302)
