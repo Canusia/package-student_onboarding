@@ -835,3 +835,81 @@ class PendingOnboardingActionTests(TestCase):
         payload = json.loads(pending_onboarding_preview(request).content)
         self.assertEqual(payload['outcome'], 'alert')
         self.assertEqual(payload['status'], 'error')
+
+
+class MenuMigrationTests(TestCase):
+    """Exercises the migration's functions directly against the live Setting
+    row — running the migration itself is not repeatable inside a test."""
+
+    def _setting_model(self):
+        from django.apps import apps as django_apps
+        return django_apps.get_model('cis', 'Setting')
+
+    def _menu_module(self):
+        import importlib
+        return importlib.import_module(
+            'student_onboarding.student_onboarding.migrations'
+            '.0003_menu_pending_onboarding')
+
+    def _fake_apps(self):
+        model = self._setting_model()
+
+        class FakeApps:
+            def get_model(self, app_label, model_name):
+                return model
+
+        return FakeApps()
+
+    def _write_menu(self, items):
+        model = self._setting_model()
+        value = {'ce_menu': json.dumps(items)}
+        # `value` (JSONField) is NOT NULL at the DB layer, so plain
+        # get_or_create() (which would insert with value=None first) isn't
+        # safe here — pass it via defaults, and update on the found path.
+        setting, created = model.objects.get_or_create(
+            key='cis.settings.menu', defaults={'value': value})
+        if not created:
+            setting.value = value
+            setting.save()
+        return setting
+
+    def _read_menu(self):
+        model = self._setting_model()
+        setting = model.objects.get(key='cis.settings.menu')
+        return json.loads(setting.value['ce_menu'])
+
+    def test_adds_item_to_the_students_group(self):
+        module = self._menu_module()
+        self._write_menu([{'name': 'students', 'label': 'Students',
+                           'sub_menu': [{'name': 'notes', 'label': 'Notes'}]}])
+        module.add_menu_item(self._fake_apps(), None)
+        sub = self._read_menu()[0]['sub_menu']
+        names = [s['name'] for s in sub]
+        self.assertIn('pending_onboarding_notifications', names)
+        self.assertEqual(names[-1], 'pending_onboarding_notifications')
+
+    def test_is_idempotent(self):
+        module = self._menu_module()
+        self._write_menu([{'name': 'students', 'sub_menu': []}])
+        module.add_menu_item(self._fake_apps(), None)
+        module.add_menu_item(self._fake_apps(), None)
+        sub = self._read_menu()[0]['sub_menu']
+        self.assertEqual(len(sub), 1)
+
+    def test_noops_when_students_group_is_absent(self):
+        module = self._menu_module()
+        self._write_menu([{'name': 'classes', 'sub_menu': []}])
+        module.add_menu_item(self._fake_apps(), None)
+        self.assertEqual(self._read_menu()[0]['sub_menu'], [])
+
+    def test_noops_when_setting_row_is_missing(self):
+        module = self._menu_module()
+        self._setting_model().objects.filter(key='cis.settings.menu').delete()
+        module.add_menu_item(self._fake_apps(), None)  # must not raise
+
+    def test_reverse_removes_the_item(self):
+        module = self._menu_module()
+        self._write_menu([{'name': 'students', 'sub_menu': []}])
+        module.add_menu_item(self._fake_apps(), None)
+        module.remove_menu_item(self._fake_apps(), None)
+        self.assertEqual(self._read_menu()[0]['sub_menu'], [])
