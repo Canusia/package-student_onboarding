@@ -156,19 +156,9 @@ def build_plan(*, term=None, only_student=None, settings_form=None,
 
     plan = Plan(config=config, term=term, debug_mode=debug_mode)
 
-    # Note: unlike the legacy notify_pending_onboarding command, this does
-    # NOT filter on completed_on__isnull=True. The whole point of a Plan is
-    # to explain, per student, why they would or would not be notified —
-    # including students whose onboarding is fully complete (DECISION_ALL_DONE).
-    # Filtering on completed_on here would make that branch unreachable for
-    # normal completions (StudentOnboarding.completed_on gets stamped by
-    # api.complete_step's recompute as soon as the last step finishes), and
-    # is redundant with the `if not pending` check below, which already
-    # classifies "nothing left pending" onboardings regardless of whether
-    # completed_on happens to be stamped.
     qs = (
         StudentOnboarding.objects
-        .filter(term=term)
+        .filter(term=term, completed_on__isnull=True)
         .select_related('student__user', 'student__highschool')
     )
     if only_student:
@@ -196,6 +186,17 @@ def build_plan(*, term=None, only_student=None, settings_form=None,
             .order_by('order')
         )
         if not pending:
+            # DECISION_ALL_DONE is a data-drift bucket, not the normal
+            # completion path: api.complete_step / api.mark_not_applicable
+            # both go through _transition_step -> recompute_completion,
+            # which stamps completed_on the moment nothing is left pending
+            # -- so a normally-finished onboarding is already excluded by
+            # the completed_on__isnull=True filter above and never reaches
+            # here. This branch instead catches rows where completed_on is
+            # still NULL despite nothing pending: e.g. a step was completed
+            # via a direct queryset write that bypassed recompute, a step
+            # row was deleted after completion, or total_steps/completed_steps
+            # drifted out of sync some other way.
             row.decision = DECISION_ALL_DONE
             continue
 

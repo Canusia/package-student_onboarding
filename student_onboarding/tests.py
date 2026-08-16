@@ -314,9 +314,17 @@ class BuildPlanTests(TestCase):
         self.assertEqual(row.missing_items, ['FERPA'])
 
     def test_all_steps_done_is_excluded(self):
+        # DECISION_ALL_DONE is a drift bucket: completed_on is still NULL while
+        # no step is pending. Built with queryset.update() so the api helpers'
+        # recompute_completion() does not stamp completed_on and lift the row
+        # out of build_plan's queryset entirely.
         from student_onboarding.student_onboarding import services
         api.add_step(self.student, key='ferpa', label='FERPA')
-        api.complete_step(self.student, key='ferpa')
+        onboarding = StudentOnboarding.objects.get(
+            student=self.student, term=self.term)
+        onboarding.steps.update(status=StudentOnboardingStep.STATUS_COMPLETED)
+        self.assertIsNone(
+            StudentOnboarding.objects.get(pk=onboarding.pk).completed_on)
         plan = self._plan()
         self.assertEqual(plan.sendable, [])
         self.assertEqual(
