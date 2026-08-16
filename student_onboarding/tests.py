@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock
 from django.contrib.auth.models import Group
 from django.contrib.auth.signals import user_logged_in
 from django.test import TestCase, RequestFactory
+from django.utils import timezone
 
 from cis.models.customuser import CustomUser
 from cis.models.term import AcademicYear, Term
@@ -267,3 +268,172 @@ class NotifyActionTests(TestCase):
         api.add_step(self.student, key='demo_notify', label='Demo')
         self._run_cmd(dry_run=False, missing_items=[])
         action.assert_not_called()
+
+
+class BuildPlanTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        cls.term = _make_term('BP1')
+
+    def setUp(self):
+        self.student = Student.objects.create(user=_make_user())
+        p = patch('student_onboarding.student_onboarding.api.active_term',
+                  return_value=self.term)
+        p.start(); self.addCleanup(p.stop)
+
+    def _settings_form(self, **overrides):
+        config = {
+            'is_active': 'Debug',
+            'freq': '3',
+            'missing_items': ['ferpa'],
+            'notify_address': 'staff@example.com',
+            'pending_app_email_subject': 'Finish your onboarding',
+            'pending_app_email': 'Hi {{student_first_name}}: {{missing_items}}',
+            'add_note': 'No',
+        }
+        config.update(overrides)
+        form = MagicMock()
+        form.from_db.return_value = config
+        return form
+
+    def _plan(self, **overrides):
+        from student_onboarding.student_onboarding import services
+        return services.build_plan(
+            term=self.term,
+            settings_form=self._settings_form(**overrides),
+        )
+
+    def test_pending_selected_step_is_sendable(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        plan = self._plan()
+        self.assertEqual(len(plan.sendable), 1)
+        row = plan.sendable[0]
+        self.assertEqual(row.decision, services.DECISION_SEND)
+        self.assertEqual(row.missing_items, ['FERPA'])
+
+    def test_all_steps_done_is_excluded(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        api.complete_step(self.student, key='ferpa')
+        plan = self._plan()
+        self.assertEqual(plan.sendable, [])
+        self.assertEqual(
+            plan.ids_with_decision(services.DECISION_ALL_DONE),
+            [str(self.student.id)],
+        )
+
+    def test_unselected_step_is_no_match(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='classes', label='Register')
+        plan = self._plan(missing_items=['ferpa'])
+        self.assertEqual(plan.sendable, [])
+        self.assertEqual(
+            plan.ids_with_decision(services.DECISION_NO_MATCH),
+            [str(self.student.id)],
+        )
+
+    def test_recently_notified_is_rate_limited(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        onboarding = StudentOnboarding.objects.get(
+            student=self.student, term=self.term)
+        onboarding.last_notified_on = timezone.now()
+        onboarding.save(update_fields=['last_notified_on'])
+        plan = self._plan()
+        self.assertEqual(plan.sendable, [])
+        self.assertEqual(
+            plan.ids_with_decision(services.DECISION_RATE_LIMITED),
+            [str(self.student.id)],
+        )
+
+    def test_ignore_rate_limit_makes_it_sendable_again(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        onboarding = StudentOnboarding.objects.get(
+            student=self.student, term=self.term)
+        onboarding.last_notified_on = timezone.now()
+        onboarding.save(update_fields=['last_notified_on'])
+        plan = services.build_plan(
+            term=self.term, settings_form=self._settings_form(),
+            ignore_rate_limit=True,
+        )
+        self.assertEqual(len(plan.sendable), 1)
+
+    def test_legacy_missing_item_alias_still_matches(self):
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        plan = self._plan(missing_items=['missing_ferpa'])
+        self.assertEqual(len(plan.sendable), 1)
+
+    def test_debug_mode_redirects_to_notify_address(self):
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        plan = self._plan()
+        self.assertTrue(plan.debug_mode)
+        self.assertEqual(plan.sendable[0].to_email, ['staff@example.com'])
+
+    def test_body_is_rendered_with_substitutions(self):
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        row = self._plan().sendable[0]
+        self.assertIn(self.student.user.first_name, row.body)
+        self.assertIn('FERPA', row.body)
+        self.assertEqual(row.subject, 'Finish your onboarding')
+
+    def test_inactive_returns_skip_reason(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        self.assertEqual(self._plan(is_active='No'), services.SKIP_INACTIVE)
+
+    def test_force_overrides_inactive(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        plan = services.build_plan(
+            term=self.term, settings_form=self._settings_form(is_active='No'),
+            force=True,
+        )
+        self.assertEqual(len(plan.sendable), 1)
+
+    def test_no_active_term_returns_skip_reason(self):
+        from student_onboarding.student_onboarding import services
+        with patch('student_onboarding.student_onboarding.services.active_term',
+                   return_value=None):
+            result = services.build_plan(settings_form=self._settings_form())
+        self.assertEqual(result, services.SKIP_NO_TERM)
+
+    def test_get_pending_notifications_returns_sendable_rows(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        rows = services.get_pending_notifications(
+            term=self.term, settings_form=self._settings_form())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].student.id, self.student.id)
+
+    def test_send_notifications_sends_and_stamps(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        plan = self._plan()
+        mailer = MagicMock()
+        result = services.send_notifications(
+            plan.sendable, config=plan.config, term=self.term,
+            send_html_mail=mailer,
+        )
+        mailer.assert_called_once()
+        self.assertEqual(len(result['sent']), 1)
+        self.assertEqual(result['by_step'], {'ferpa': 1})
+        onboarding = StudentOnboarding.objects.get(
+            student=self.student, term=self.term)
+        self.assertIsNotNone(onboarding.last_notified_on)
+
+    def test_send_notifications_dry_run_does_not_send(self):
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        plan = self._plan()
+        mailer = MagicMock()
+        services.send_notifications(
+            plan.sendable, config=plan.config, term=self.term,
+            send_html_mail=mailer, dry_run=True,
+        )
+        mailer.assert_not_called()
+        onboarding = StudentOnboarding.objects.get(
+            student=self.student, term=self.term)
+        self.assertIsNone(onboarding.last_notified_on)
