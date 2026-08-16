@@ -50,6 +50,11 @@ class StudentOnboardingConfig(AppConfig):
             dispatch_uid='student_onboarding.register_cron',
         )
 
+        # Imported here, not at module scope: the registry lives in the host
+        # project and pulls in cis, which is not importable until the app
+        # registry is populated.
+        from . import actions  # noqa: F401
+
 
 class DevStudentOnboardingConfig(StudentOnboardingConfig):
     """Dev config — used when this submodule is checked out under

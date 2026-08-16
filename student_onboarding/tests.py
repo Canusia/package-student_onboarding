@@ -1,4 +1,5 @@
 import datetime
+import json
 import uuid
 from unittest.mock import patch, MagicMock
 
@@ -796,3 +797,41 @@ class PendingNotificationsViewTests(TestCase):
             reverse('student_onboarding_ce:pending_notifications'))
         self.assertIsNotNone(response.context['skip_reason'])
         self.assertEqual(response.context['rows'], [])
+
+
+class PendingOnboardingActionTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        cls.term = _make_term('PA1')
+
+    def test_action_is_registered_for_the_detail_scope(self):
+        from myce.component_registry.student import student_actions
+        detail = student_actions.for_scope('detail')
+        slugs = [slug for group in detail.values()
+                 for slug in group['actions'].keys()]
+        self.assertIn('pending_onboarding_preview', slugs)
+
+    def test_action_returns_open_outcome_with_the_detail_url(self):
+        from student_onboarding.student_onboarding.actions import (
+            pending_onboarding_preview,
+        )
+        student = Student.objects.create(user=_make_user())
+        request = RequestFactory().post('/', {'ids[]': [str(student.id)]})
+        response = pending_onboarding_preview(request)
+        payload = json.loads(response.content)
+        self.assertEqual(payload['outcome'], 'open')
+        self.assertEqual(
+            payload['url'],
+            reverse('student_onboarding_ce:pending_notification_detail',
+                    args=[student.id]),
+        )
+
+    def test_action_errors_when_nothing_is_selected(self):
+        from student_onboarding.student_onboarding.actions import (
+            pending_onboarding_preview,
+        )
+        request = RequestFactory().post('/', {})
+        payload = json.loads(pending_onboarding_preview(request).content)
+        self.assertEqual(payload['outcome'], 'alert')
+        self.assertEqual(payload['status'], 'error')
