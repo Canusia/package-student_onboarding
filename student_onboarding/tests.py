@@ -445,3 +445,88 @@ class BuildPlanTests(TestCase):
         onboarding = StudentOnboarding.objects.get(
             student=self.student, term=self.term)
         self.assertIsNone(onboarding.last_notified_on)
+
+
+class NotifyCommandSummaryTests(TestCase):
+    """The command's summary/log contract is what the cron log shows, so it
+    is pinned across the service refactor."""
+
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        cls.term = _make_term('NC1')
+
+    def setUp(self):
+        self.student = Student.objects.create(user=_make_user())
+        p = patch('student_onboarding.student_onboarding.api.active_term',
+                  return_value=self.term)
+        p.start(); self.addCleanup(p.stop)
+        p2 = patch('student_onboarding.student_onboarding.management.commands.'
+                   'notify_pending_onboarding.active_term',
+                   return_value=self.term)
+        p2.start(); self.addCleanup(p2.stop)
+
+    def _run(self, dry_run=True, **config_overrides):
+        from student_onboarding.student_onboarding.management.commands.\
+            notify_pending_onboarding import Command
+        config = {
+            'is_active': 'Debug',
+            'freq': '3',
+            'missing_items': ['ferpa'],
+            'notify_address': 'staff@example.com',
+            'pending_app_email_subject': 'S',
+            'pending_app_email': 'body',
+            'add_note': 'No',
+        }
+        config.update(config_overrides)
+        form = MagicMock()
+        form.from_db.return_value = config
+        return Command()._run(
+            student_regis_pending=form,
+            send_html_mail=MagicMock(),
+            dry_run=dry_run,
+            only_student=str(self.student.id),
+        )
+
+    def test_summary_counts_a_sendable_student(self):
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        summary, log = self._run()
+        self.assertIn('[dry-run] Sent 1', summary)
+        self.assertIn('By step: 1 ', summary)
+        self.assertEqual(len(log['sent']), 1)
+        self.assertEqual(log['sent'][0]['issues'], ['FERPA'])
+        self.assertEqual(log['by_step'], {'ferpa': 1})
+
+    def test_log_buckets_are_present_and_named_as_before(self):
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        _, log = self._run()
+        self.assertEqual(
+            sorted(log.keys()),
+            ['by_step', 'sent', 'skipped_all_done', 'skipped_no_match',
+             'skipped_rate_limit'],
+        )
+
+    def test_unselected_step_lands_in_skipped_no_match(self):
+        api.add_step(self.student, key='classes', label='Register')
+        _, log = self._run(missing_items=['ferpa'])
+        self.assertEqual(log['skipped_no_match'], [str(self.student.id)])
+        self.assertEqual(log['sent'], [])
+
+    def test_inactive_returns_legacy_message(self):
+        summary, log = self._run(is_active='No')
+        self.assertEqual(summary, 'Notification disabled (is_active=No). Skipped.')
+        self.assertEqual(log, {})
+
+    def test_no_active_term_returns_legacy_message(self):
+        # services.build_plan re-derives `term` via its own `active_term`
+        # import when the command passes it an explicit None (the "no
+        # active term" case), so both call sites need to agree here. In
+        # production they're the same unmocked function, so this only
+        # matters under test.
+        with patch('student_onboarding.student_onboarding.management.commands.'
+                   'notify_pending_onboarding.active_term', return_value=None), \
+             patch('student_onboarding.student_onboarding.services.active_term',
+                   return_value=None):
+            summary, log = self._run()
+        self.assertEqual(summary, 'No active term. Skipped.')
+        self.assertEqual(log, {})
