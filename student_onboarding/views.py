@@ -1,4 +1,5 @@
-"""Staff-facing DRF endpoints for the /ce/students/ onboarding summary tabs."""
+"""Staff-facing DRF endpoints for the /ce/students/ onboarding summary tabs,
+plus the CE template views for previewing pending onboarding reminders."""
 import datetime
 
 from django.db.models import Count, Q, Max, F, Prefetch
@@ -196,6 +197,35 @@ class OnboardingFunnelView(views.APIView):
             .order_by('key')
         )
         return Response(list(rows))
+
+
+def pending_notifications(request):
+    """CE page: who the next scheduled onboarding reminder would email.
+
+    Read-only. Rows come straight from the same planner the cron command
+    uses, so this cannot drift from what actually gets sent.
+    """
+    from django.shortcuts import render
+    from cis.menu import cis_menu, draw_menu
+    from cis.models.term import Term
+
+    from . import services
+
+    menu = draw_menu(cis_menu, 'students', 'pending_onboarding_notifications')
+    term = _resolve_term(request)
+    plan = services.build_plan(term=term)
+
+    skip_reason = plan if isinstance(plan, str) else None
+
+    return render(request, 'student_onboarding/ce/pending_notifications.html', {
+        'page_title': 'Onboarding Reminders',
+        'menu': menu,
+        'rows': [] if skip_reason else plan.sendable,
+        'skip_reason': skip_reason,
+        'debug_mode': False if skip_reason else plan.debug_mode,
+        'terms': Term.objects.all(),
+        'selected_term': term,
+    })
 
 
 def pending_notification_detail(request, student_id):

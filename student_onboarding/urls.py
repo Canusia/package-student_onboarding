@@ -14,6 +14,7 @@ from .views import (
     OnboardingStalledView,
     OnboardingTimelineView,
     OnboardingFunnelView,
+    pending_notifications,
     pending_notification_detail,
 )
 
@@ -28,6 +29,11 @@ urlpatterns = [
     path('api/stalled/', OnboardingStalledView.as_view(), name='stalled'),
     path('api/timeline/', OnboardingTimelineView.as_view(), name='timeline'),
     path('api/funnel/', OnboardingFunnelView.as_view(), name='funnel'),
+    path(
+        'notifications/pending/',
+        user_passes_test(user_has_cis_role, login_url='/')(pending_notifications),
+        name='pending_notifications',
+    ),
     path(
         'notifications/pending/<uuid:student_id>/',
         user_passes_test(user_has_cis_role, login_url='/')(

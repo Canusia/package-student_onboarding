@@ -714,3 +714,85 @@ class PendingNotificationDetailViewTests(TestCase):
         self.client.logout()
         response = self.client.get(self._url())
         self.assertEqual(response.status_code, 302)
+
+
+class PendingNotificationsViewTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if _login_history_post_login is not None:
+            user_logged_in.disconnect(_login_history_post_login)
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        if _login_history_post_login is not None:
+            user_logged_in.connect(_login_history_post_login)
+
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        Group.objects.get_or_create(name='ce')
+        cls.term = _make_term('PV1')
+
+    def setUp(self):
+        self.student = Student.objects.create(user=_make_user())
+        p = patch('student_onboarding.student_onboarding.api.active_term',
+                  return_value=self.term)
+        p.start(); self.addCleanup(p.stop)
+        p2 = patch('student_onboarding.student_onboarding.views.active_term',
+                   return_value=self.term)
+        p2.start(); self.addCleanup(p2.stop)
+
+        self.staff = _make_user(email=f'ce-{uuid.uuid4()}@example.com')
+        self.staff.set_password('pw12345!')
+        self.staff.save()
+        self.staff.groups.add(Group.objects.get(name='ce'))
+        self.client.force_login(self.staff)
+
+    def _patch_plan(self, **overrides):
+        config = {
+            'is_active': 'Debug',
+            'freq': '3',
+            'missing_items': ['ferpa'],
+            'notify_address': 'staff@example.com',
+            'pending_app_email_subject': 'S',
+            'pending_app_email': 'body {{missing_items}}',
+            'add_note': 'No',
+        }
+        config.update(overrides)
+        form = MagicMock()
+        form.from_db.return_value = config
+        p = patch('student_onboarding.student_onboarding.services._load_config',
+                  return_value=config)
+        p.start(); self.addCleanup(p.stop)
+
+    def test_anonymous_is_redirected(self):
+        self.client.logout()
+        response = self.client.get(
+            reverse('student_onboarding_ce:pending_notifications'))
+        self.assertEqual(response.status_code, 302)
+
+    def test_sendable_student_is_listed(self):
+        self._patch_plan()
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        response = self.client.get(
+            reverse('student_onboarding_ce:pending_notifications'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context['rows']), 1)
+        self.assertContains(response, 'FERPA')
+
+    def test_excluded_student_is_not_listed(self):
+        self._patch_plan(missing_items=['ferpa'])
+        api.add_step(self.student, key='classes', label='Register')
+        response = self.client.get(
+            reverse('student_onboarding_ce:pending_notifications'))
+        self.assertEqual(response.context['rows'], [])
+
+    def test_skip_reason_is_shown_when_disabled(self):
+        self._patch_plan(is_active='No')
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        response = self.client.get(
+            reverse('student_onboarding_ce:pending_notifications'))
+        self.assertIsNotNone(response.context['skip_reason'])
+        self.assertEqual(response.context['rows'], [])
