@@ -209,6 +209,8 @@ def pending_notifications(request):
     from cis.menu import cis_menu, draw_menu
     from cis.models.term import Term
 
+    from cis.campus_gate import can_access_student
+
     from . import services
 
     menu = draw_menu(cis_menu, 'students', 'pending_onboarding_notifications')
@@ -217,14 +219,28 @@ def pending_notifications(request):
 
     skip_reason = plan if isinstance(plan, str) else None
 
+    if skip_reason:
+        rows = []
+    else:
+        # plan.sendable is a list of PlanRow, not a queryset, so the
+        # campus gate is applied in Python per row rather than via
+        # scope_students_by_campus. The list is bounded by how many
+        # students are currently sendable in a term (small, and already
+        # loaded via select_related), so the per-row check does not add
+        # a meaningful N+1 - and it avoids re-querying Student separately
+        # from the rows we already have in memory.
+        rows = [row for row in plan.sendable
+                if can_access_student(request.user, row.student)]
+
     return render(request, 'student_onboarding/ce/pending_notifications.html', {
         'page_title': 'Onboarding Reminders',
         'menu': menu,
-        'rows': [] if skip_reason else plan.sendable,
+        'rows': rows,
         'skip_reason': skip_reason,
         'debug_mode': False if skip_reason else plan.debug_mode,
         'terms': Term.objects.all(),
         'selected_term': term,
+        'is_active_term': bool(term) and term == active_term(),
     })
 
 
@@ -237,14 +253,19 @@ def pending_notification_detail(request, student_id):
     Onboarding Reminder action on the student record.
     """
     from django.contrib import messages
+    from django.http import Http404
     from django.shortcuts import get_object_or_404, redirect, render
     from django.urls import reverse
 
+    from cis.campus_gate import can_access_student
     from cis.models.student import Student
 
     from . import services
 
     student = get_object_or_404(Student, pk=student_id)
+    if not can_access_student(request.user, student):
+        raise Http404
+
     term = _resolve_term(request)
 
     if request.method == 'POST':
@@ -272,6 +293,25 @@ def pending_notification_detail(request, student_id):
         term=term, only_student=str(student_id), force=True)
     skip_reason = plan if isinstance(plan, str) else None
     row = None if skip_reason else (plan.rows[0] if plan.rows else None)
+
+    if row is not None and row.decision == services.DECISION_RATE_LIMITED:
+        # The row's subject/body/to_email are never rendered by build_plan
+        # for a rate-limited student (they'd never actually be used by the
+        # cron), but the operator still needs to see what Send Now would
+        # mail before clicking it. Build a second, ignore-rate-limit plan
+        # purely to source the display content; the row's decision,
+        # last_notified_on and next_eligible_on are left untouched so the
+        # page keeps telling the truth about what the cron would do.
+        preview_plan = services.build_plan(
+            term=term, only_student=str(student_id),
+            ignore_rate_limit=True, force=True,
+        )
+        if not isinstance(preview_plan, str) and preview_plan.rows:
+            preview_row = preview_plan.rows[0]
+            row.subject = preview_row.subject
+            row.body = preview_row.body
+            row.html_body = preview_row.html_body
+            row.to_email = preview_row.to_email
 
     return render(
         request, 'student_onboarding/ce/pending_notification_detail.html', {

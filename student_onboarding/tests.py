@@ -667,6 +667,26 @@ class PendingNotificationDetailViewTests(TestCase):
                          services.DECISION_RATE_LIMITED)
         self.assertIsNotNone(response.context['row'].next_eligible_on)
 
+    def test_rate_limited_student_still_shows_content_and_recipients(self):
+        """A rate-limited student is the common case, not an edge case -
+        the operator must be able to see exactly what Send Now would mail
+        before clicking it, even though the row is not sendable."""
+        from student_onboarding.student_onboarding import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        onboarding = StudentOnboarding.objects.get(
+            student=self.student, term=self.term)
+        onboarding.last_notified_on = timezone.now()
+        onboarding.save(update_fields=['last_notified_on'])
+
+        response = self.client.get(self._url())
+        row = response.context['row']
+        self.assertEqual(row.decision, services.DECISION_RATE_LIMITED)
+        self.assertIsNotNone(row.next_eligible_on)
+        self.assertEqual(row.subject, 'Finish up')
+        self.assertTrue(row.to_email)
+        self.assertContains(response, 'Finish up')
+        self.assertContains(response, row.to_email[0])
+
     def test_no_onboarding_record_renders_without_a_row(self):
         response = self.client.get(self._url())
         self.assertEqual(response.status_code, 200)
@@ -715,6 +735,21 @@ class PendingNotificationDetailViewTests(TestCase):
         self.client.logout()
         response = self.client.get(self._url())
         self.assertEqual(response.status_code, 302)
+
+    def test_post_with_term_id_in_query_string_acts_on_that_term(self):
+        """The detail template's <form method="post"> has no `action`, so a
+        term_id carried on the page URL must survive the POST and drive
+        which term's plan gets built and sent."""
+        from student_onboarding.student_onboarding import services
+        other_term = _make_term('PD2')
+        with patch('student_onboarding.student_onboarding.services'
+                   '.build_plan', wraps=services.build_plan) as mock_build:
+            self.client.post(f'{self._url()}?term_id={other_term.id}')
+        # Every call the POST handler makes to build_plan (including the
+        # rate-limited redisplay path, if taken) must resolve to other_term,
+        # not the active term the view would fall back to without a term_id.
+        terms_used = {call.kwargs.get('term') for call in mock_build.call_args_list}
+        self.assertEqual(terms_used, {other_term})
 
 
 class PendingNotificationsViewTests(TestCase):
@@ -798,6 +833,33 @@ class PendingNotificationsViewTests(TestCase):
         self.assertIsNotNone(response.context['skip_reason'])
         self.assertEqual(response.context['rows'], [])
 
+    def test_view_details_link_carries_the_selected_term_id(self):
+        self._patch_plan()
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        response = self.client.get(
+            reverse('student_onboarding_ce:pending_notifications'),
+            {'term_id': str(self.term.id)})
+        detail_url = reverse(
+            'student_onboarding_ce:pending_notification_detail',
+            args=[self.student.id])
+        self.assertContains(
+            response, f'{detail_url}?term_id={self.term.id}')
+
+    def test_wording_states_whatif_for_a_non_active_term(self):
+        self._patch_plan()
+        other_term = _make_term('PV2')
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        onboarding = StudentOnboarding.objects.get(
+            student=self.student, term=self.term)
+        onboarding.term = other_term
+        onboarding.save(update_fields=['term'])
+        response = self.client.get(
+            reverse('student_onboarding_ce:pending_notifications'),
+            {'term_id': str(other_term.id)})
+        self.assertFalse(response.context['is_active_term'])
+        self.assertContains(response, 'what-if')
+        self.assertNotContains(response, 'would be emailed at the')
+
 
 class PendingOnboardingActionTests(TestCase):
     @classmethod
@@ -835,6 +897,118 @@ class PendingOnboardingActionTests(TestCase):
         payload = json.loads(pending_onboarding_preview(request).content)
         self.assertEqual(payload['outcome'], 'alert')
         self.assertEqual(payload['status'], 'error')
+
+
+class PendingNotificationCampusGateTests(TestCase):
+    """A ce user scoped to campuses they don't process must not be able to
+    view or send an onboarding reminder for a verified student who applied
+    at a campus outside their scope - typing the detail URL directly must
+    404 just like every other out-of-scope student record, and the list
+    page must silently drop such rows."""
+
+    @classmethod
+    def setUpClass(cls):
+        if _login_history_post_login is not None:
+            user_logged_in.disconnect(_login_history_post_login)
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        if _login_history_post_login is not None:
+            user_logged_in.connect(_login_history_post_login)
+
+    @classmethod
+    def setUpTestData(cls):
+        from django.conf import settings as dj_settings
+
+        from cis.models.course import Campus, Cohort, Course
+        from cis.models.section import ClassSection, StudentRegistration
+
+        Group.objects.get_or_create(name='student')
+        Group.objects.get_or_create(name='ce')
+        # cis.signals.registrations.update_registration writes a note as
+        # this system user on every StudentRegistration save.
+        CustomUser.objects.get_or_create(
+            username='cron', defaults={'email': 'cron@example.com'})
+        cls.term = _make_term('PC1')
+
+        cls.campus_a = Campus.objects.create(
+            name=f'Alpha-{uuid.uuid4().hex[:8]}',
+            code=f'{dj_settings.CAMPUS_CODE_PREFIX}-{uuid.uuid4().hex[:8]}')
+        cls.campus_b = Campus.objects.create(
+            name=f'Beta-{uuid.uuid4().hex[:8]}',
+            code=f'{dj_settings.CAMPUS_CODE_PREFIX}-{uuid.uuid4().hex[:8]}')
+        cohort = Cohort.objects.create(
+            name=f'Co-{uuid.uuid4().hex[:8]}', designator='CO')
+        course = Course.objects.create(
+            catalog_number='101', title='Intro',
+            cohort=cohort, campus=cls.campus_b)
+        cls.section = ClassSection.objects.create(
+            class_number='1001', term=cls.term, course=course)
+
+    def setUp(self):
+        from cis.models.section import StudentRegistration
+
+        # Verified student who applied at campus_b - outside self.ce's scope.
+        self.student = Student.objects.create(
+            user=_make_user(), account_verified=True)
+        StudentRegistration.objects.create(
+            student=self.student, class_section=self.section,
+            status='applied', verification_status='pending', grade='A',
+            status_changed_on={'applied_on': '01/01/2024'},
+        )
+        api.add_step(self.student, key='ferpa', label='FERPA')
+
+        p = patch('student_onboarding.student_onboarding.api.active_term',
+                  return_value=self.term)
+        p.start(); self.addCleanup(p.stop)
+        p2 = patch('student_onboarding.student_onboarding.views.active_term',
+                   return_value=self.term)
+        p2.start(); self.addCleanup(p2.stop)
+
+        self.config = {
+            'is_active': 'Debug',
+            'freq': '3',
+            'missing_items': ['ferpa'],
+            'notify_address': 'staff@example.com',
+            'pending_app_email_subject': 'Finish up',
+            'pending_app_email': 'Hi {{student_first_name}}: {{missing_items}}',
+            'add_note': 'No',
+        }
+        p3 = patch('student_onboarding.student_onboarding.services._load_config',
+                   side_effect=lambda settings_form=None: self.config)
+        p3.start(); self.addCleanup(p3.stop)
+
+        # ce user scoped only to campus_a - cannot process campus_b.
+        self.ce = _make_user(email=f'ce-{uuid.uuid4()}@example.com')
+        self.ce.groups.add(Group.objects.get(name='ce'))
+        self.ce.campus = {'process_campus': [str(self.campus_a.id)],
+                          'default_campus': ''}
+        self.ce.save()
+        self.client.force_login(self.ce)
+
+    def _detail_url(self):
+        return reverse('student_onboarding_ce:pending_notification_detail',
+                       args=[self.student.id])
+
+    def test_get_detail_404s_for_out_of_scope_student(self):
+        response = self.client.get(self._detail_url())
+        self.assertEqual(response.status_code, 404)
+
+    def test_post_detail_404s_and_sends_nothing_for_out_of_scope_student(self):
+        with patch('student_onboarding.student_onboarding.services'
+                   '.send_notifications') as mock_send:
+            response = self.client.post(self._detail_url())
+        self.assertEqual(response.status_code, 404)
+        mock_send.assert_not_called()
+
+    def test_out_of_scope_student_is_not_listed(self):
+        response = self.client.get(
+            reverse('student_onboarding_ce:pending_notifications'))
+        self.assertEqual(response.status_code, 200)
+        student_ids = [str(row.student.id) for row in response.context['rows']]
+        self.assertNotIn(str(self.student.id), student_ids)
 
 
 class MenuMigrationTests(TestCase):

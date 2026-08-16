@@ -46,9 +46,17 @@
                     </div>
                 {% else %}
                     <p class="mb-3">
-                        <strong>{{ rows|length }}</strong> student(s) would be emailed at the
-                        next scheduled run. This is a snapshot taken just now - a student who
-                        finishes a step before the job runs will not be emailed.
+                        {% if is_active_term %}
+                            <strong>{{ rows|length }}</strong> student(s) would be emailed at the
+                            next scheduled run. This is a snapshot taken just now - a student who
+                            finishes a step before the job runs will not be emailed.
+                        {% else %}
+                            <strong>{{ rows|length }}</strong> student(s) would be emailed if the
+                            reminder job ran for <strong>{{ selected_term }}</strong> right now.
+                            This is a what-if for that term only - the scheduled job only ever
+                            processes the active term, so nothing here will actually be sent
+                            unless {{ selected_term }} becomes the active term.
+                        {% endif %}
                     </p>
 
                     <table class="table table-striped table-sm mb-0">
@@ -78,7 +86,7 @@
                                 </td>
                                 <td class="text-right">
                                     <a href="#" class="btn btn-sm btn-outline-primary view-notification-detail"
-                                       data-url="{% url 'student_onboarding_ce:pending_notification_detail' row.student.id %}">
+                                       data-url="{% url 'student_onboarding_ce:pending_notification_detail' row.student.id %}{% if selected_term %}?term_id={{ selected_term.id }}{% endif %}">
                                         View Details
                                     </a>
                                 </td>

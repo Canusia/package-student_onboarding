@@ -78,7 +78,7 @@
             </div>
         {% endif %}
 
-        <form method="post">
+        <form method="post" onsubmit="return confirm('Send the onboarding reminder to {{ student.user.first_name|escapejs }} {{ student.user.last_name|escapejs }} ({% for address in row.to_email %}{{ address|escapejs }}{% if not forloop.last %}, {% endif %}{% endfor %}) now?');">
             {% csrf_token %}
             <button type="submit" class="btn btn-primary">Send Now</button>
             <span class="text-muted ml-2">
