@@ -107,6 +107,18 @@ class Plan:
         return [str(row.student.id) for row in self.rows
                 if row.decision == decision]
 
+    def ids_with_any_decision(self, *decisions):
+        """Ids for any of `decisions`, in queryset-iteration order.
+
+        Not a concatenation of per-decision lists: the management command's
+        `detailed_log` groups no-match and no-email students into one bucket,
+        and the pre-refactor command appended them inline as it walked, so the
+        interleaved order is part of the output contract.
+        """
+        wanted = set(decisions)
+        return [str(row.student.id) for row in self.rows
+                if row.decision in wanted]
+
 
 def _load_config(settings_form=None):
     if settings_form is None:

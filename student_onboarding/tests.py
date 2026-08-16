@@ -517,6 +517,64 @@ class NotifyCommandSummaryTests(TestCase):
         self.assertEqual(summary, 'Notification disabled (is_active=No). Skipped.')
         self.assertEqual(log, {})
 
+    def test_skipped_no_match_ids_are_in_queryset_iteration_order(self):
+        # skipped_no_match merges two decisions (DECISION_NO_MATCH and
+        # DECISION_NO_EMAIL). The pre-refactor command appended ids to this
+        # bucket inline as it walked the queryset, interleaving the two
+        # reasons in iteration order -- it must NOT come out grouped by
+        # reason (i.e. not `ids_with_decision(A) + ids_with_decision(B)`).
+        #
+        # self.student (created first, in setUp) is put in the NO_EMAIL
+        # bucket, and a second student (created after) is put in the
+        # NO_MATCH bucket, so that queryset-iteration order (first student,
+        # then second) disagrees with decision-grouped order (NO_MATCH
+        # emitted before NO_EMAIL by the command's own DECISION_NO_MATCH,
+        # DECISION_NO_EMAIL argument order) -- a concatenation would emit
+        # [second, self.student] where the real walk order is
+        # [self.student, second].
+        from student_onboarding.student_onboarding import services
+        from student_onboarding.student_onboarding.management.commands.\
+            notify_pending_onboarding import Command
+
+        self.student.user.email = ''
+        self.student.user.save(update_fields=['email'])
+        api.add_step(self.student, key='ferpa', label='FERPA')
+
+        second_student = Student.objects.create(user=_make_user())
+        api.add_step(second_student, key='classes', label='Register')
+
+        config = {
+            'is_active': 'Yes',
+            'freq': '3',
+            'missing_items': ['ferpa'],
+            'notify_address': 'staff@example.com',
+            'pending_app_email_subject': 'S',
+            'pending_app_email': 'body',
+            'add_note': 'No',
+        }
+        form = MagicMock()
+        form.from_db.return_value = config
+
+        with patch('django.conf.settings.DEBUG', False):
+            plan = services.build_plan(term=self.term, settings_form=form)
+            expected_order = [
+                str(row.student.id) for row in plan.rows
+                if row.decision in (services.DECISION_NO_MATCH,
+                                    services.DECISION_NO_EMAIL)
+            ]
+            self.assertEqual(sorted(expected_order),
+                             sorted([str(self.student.id),
+                                     str(second_student.id)]))
+
+            _, log = Command()._run(
+                student_regis_pending=form,
+                send_html_mail=MagicMock(),
+                dry_run=True,
+                only_student=None,
+            )
+
+        self.assertEqual(log['skipped_no_match'], expected_order)
+
     def test_no_active_term_returns_legacy_message(self):
         # services.build_plan re-derives `term` via its own `active_term`
         # import when the command passes it an explicit None (the "no

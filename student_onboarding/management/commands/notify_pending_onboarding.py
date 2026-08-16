@@ -81,11 +81,14 @@ class Command(BaseCommand):
             'skipped_rate_limit': plan.ids_with_decision(
                 services.DECISION_RATE_LIMITED),
             # A student with no valid email address has always been logged
-            # under `skipped_no_match`; keep that grouping.
-            'skipped_no_match': (
-                plan.ids_with_decision(services.DECISION_NO_MATCH)
-                + plan.ids_with_decision(services.DECISION_NO_EMAIL)
-            ),
+            # under `skipped_no_match`; keep that grouping. Use
+            # ids_with_any_decision (not two ids_with_decision calls
+            # concatenated) so ids stay in queryset-iteration order instead
+            # of being grouped by reason -- the pre-refactor command
+            # appended them inline as it walked, and that interleaved order
+            # is part of the output contract.
+            'skipped_no_match': plan.ids_with_any_decision(
+                services.DECISION_NO_MATCH, services.DECISION_NO_EMAIL),
             'skipped_all_done': plan.ids_with_decision(
                 services.DECISION_ALL_DONE),
             'by_step': result['by_step'],
