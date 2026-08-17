@@ -136,13 +136,25 @@ class OnboardingSignalReceiverTests(TestCase):
         self.addCleanup(cis_active_patcher.stop)
 
     def test_application_started_seeds_default_steps(self):
+        # This test is about event-to-step wiring (APPLICATION_STARTED ->
+        # seeding), not the seeding gate. An unverified student is now
+        # deliberately seeded with verify_email alone (see
+        # test_unverified_student_seeded_with_verify_email_only below), so
+        # verify the student first to exercise the rest of the catalog.
+        self.student.account_verified = True
+        self.student.save(update_fields=['account_verified'])
         _send(events.APPLICATION_STARTED, self.student)
         onboarding = StudentOnboarding.objects.get(student=self.student, term=self.term)
         keys = set(onboarding.steps.values_list('key', flat=True))
-        # First-timer (unverified email, no prior data) — verify_info is omitted
-        self.assertEqual(keys, {'verify_email', 'ferpa', 'classes', 'student_agreement'})
+        # Verified first-timer (no prior data) — verify_email and verify_info
+        # are both omitted
+        self.assertEqual(keys, {'ferpa', 'classes', 'student_agreement'})
 
     def test_ferpa_completed_marks_step_done(self):
+        # Covers the FERPA_COMPLETED completion handler, which only applies
+        # once the ferpa step exists — i.e. once the student is verified.
+        self.student.account_verified = True
+        self.student.save(update_fields=['account_verified'])
         _send(events.APPLICATION_STARTED, self.student)
         _send(events.FERPA_COMPLETED, self.student)
         step = StudentOnboardingStep.objects.get(
@@ -151,12 +163,28 @@ class OnboardingSignalReceiverTests(TestCase):
         self.assertEqual(step.status, 'completed')
 
     def test_classes_applied_marks_step_done(self):
+        # Covers the CLASSES_APPLIED completion handler, which only applies
+        # once the classes step exists — i.e. once the student is verified.
+        self.student.account_verified = True
+        self.student.save(update_fields=['account_verified'])
         _send(events.APPLICATION_STARTED, self.student)
         _send(events.CLASSES_APPLIED, self.student)
         step = StudentOnboardingStep.objects.get(
             onboarding__student=self.student, key='classes'
         )
         self.assertEqual(step.status, 'completed')
+
+    def test_unverified_student_seeded_with_verify_email_only(self):
+        # Regression guard from this side of the boundary: an unverified
+        # student must be seeded with verify_email alone. The gate itself
+        # lives in myce_tenant_configs.services.onboarding_steps
+        # (seeded_when=_is_verified on ferpa/classes/student_agreement/
+        # tuition_assistance) — this pins that the event wiring here
+        # actually respects it end to end.
+        _send(events.APPLICATION_STARTED, self.student)
+        onboarding = StudentOnboarding.objects.get(student=self.student, term=self.term)
+        keys = set(onboarding.steps.values_list('key', flat=True))
+        self.assertEqual(keys, {'verify_email'})
 
     def test_user_logged_in_creates_new_onboarding_for_new_term(self):
         # Seed onboarding for term T2
