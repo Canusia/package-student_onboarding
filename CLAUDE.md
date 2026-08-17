@@ -125,7 +125,7 @@ When adding a step, **the only file you should need to edit is the host app's `m
 
 ## Term rollover
 
-`reseed_on_term_rollover` listens to Django's `user_logged_in`. On each login it calls `get_or_create_for_current_term` (creates a new `StudentOnboarding` row when `active_term()` returns a new term) and re-seeds defaults if the new row has no steps. Don't move this into the generic event bus — it's a Django auth signal, not an onboarding event.
+`reseed_on_term_rollover` listens to Django's `user_logged_in`. On each login it calls `get_or_create_for_current_term` (creates a new `StudentOnboarding` row when `active_term()` returns a new term) and **unconditionally** re-seeds defaults — not gated on the row having no steps. That gate was deliberately removed: CE staff's "Mark as Verified" action is a queryset `.update(account_verified=True)`, which fires no `post_save` and dispatches no `EMAIL_VERIFIED`, so a student verified that way (or by the legacy SIS importer, which never touches `account_verified`) would stay stuck on phase one forever without an unconditional re-seed. `add_step` is idempotent, so the cost on an already-seeded record is one query per step. The same receiver also completes the `verify_email` step via `complete_step` when `student.account_verified` is true, for the same reason — neither out-of-band path completes it any other way. Don't move this into the generic event bus — it's a Django auth signal, not an onboarding event.
 
 ## Tests
 

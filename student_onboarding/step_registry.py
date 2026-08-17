@@ -18,8 +18,10 @@ class StepDefinition:
     order: int = 100
     url_name: str = ''
     message: str = ''
-    # Predicate(student) -> bool. If set, the step is only seeded when True.
-    # If None, the step is always seeded.
+    # Predicate(student, term=None) -> bool. If set, the step is only seeded
+    # when True. If None, the step is always seeded. `term` is passed through
+    # from the caller's already-resolved active_term() when available;
+    # predicates that don't need it may ignore the parameter.
     seeded_when: Optional[Callable] = None
     # Predicate(student, term) -> bool. Used by the backfill command to decide
     # whether an existing student should have this step pre-marked complete.
