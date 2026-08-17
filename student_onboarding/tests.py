@@ -202,9 +202,14 @@ class OnboardingSignalReceiverTests(TestCase):
         _send(events.APPLICATION_STARTED, self.student)
         self.assertEqual(StudentOnboarding.objects.filter(student=self.student).count(), 1)
 
-        # Simulate term rollover by patching active_term to a new term
+        # Simulate term rollover by patching active_term to a new term.
+        # All three must be patched: as of cis v0.0.21 reseed_on_term_rollover
+        # resolves the term ONCE from its own module and threads it down, so
+        # patching only the api/tenant paths leaves the receiver on the old
+        # term and the rollover is never simulated at all.
         new_term = _make_term('T3')
-        with patch('student_onboarding.student_onboarding.api.active_term', return_value=new_term), \
+        with patch('cis.signals.onboarding.active_term', return_value=new_term), \
+             patch('student_onboarding.student_onboarding.api.active_term', return_value=new_term), \
              patch('myce_tenant_configs.services.onboarding_steps.active_term', return_value=new_term):
             request = RequestFactory().get('/', HTTP_USER_AGENT='test-agent')
             user_logged_in.send(
