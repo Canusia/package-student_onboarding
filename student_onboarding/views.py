@@ -4,6 +4,7 @@ import datetime
 
 from django.db.models import Count, Q, Max, F, Prefetch
 from django.utils import timezone
+from django.views.decorators.clickjacking import xframe_options_exempt
 from rest_framework import viewsets, views
 from rest_framework.response import Response
 
@@ -244,6 +245,7 @@ def pending_notifications(request):
     })
 
 
+@xframe_options_exempt
 def pending_notification_detail(request, student_id):
     """CE page for one student: what the onboarding reminder would say, why
     they would or would not receive it, and a Send Now button.

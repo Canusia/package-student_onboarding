@@ -752,6 +752,29 @@ class PendingNotificationDetailViewTests(TestCase):
         self.assertEqual(terms_used, {other_term})
 
 
+    def test_detail_response_is_not_frame_denied(self):
+        """The detail page renders inside the list page's shared #details_src
+        iframe, so it must opt out of the project's X_FRAME_OPTIONS = DENY -
+        as every other modal target here does (drop_wd, pd_event,
+        support_ticket, tech_center_staff, highschool_admin, future_sections).
+        Without it the browser refuses the frame and the user sees "refused to
+        connect" instead of the preview.
+
+        Asserted on the response header, not on the view function:
+        xframe_options_exempt flags the *response*, which
+        XFrameOptionsMiddleware then honors, so only the header proves it.
+        """
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.headers.get('X-Frame-Options'))
+
+    def test_list_page_is_still_frame_denied(self):
+        # The list page is top-level, never framed - it keeps the
+        # project-wide clickjacking protection.
+        response = self.client.get(
+            reverse('student_onboarding_ce:pending_notifications'))
+        self.assertEqual(response.headers.get('X-Frame-Options'), 'DENY')
+
 class PendingNotificationsViewTests(TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1087,3 +1110,4 @@ class MenuMigrationTests(TestCase):
         module.add_menu_item(self._fake_apps(), None)
         module.remove_menu_item(self._fake_apps(), None)
         self.assertEqual(self._read_menu()[0]['sub_menu'], [])
+
