@@ -52,7 +52,14 @@ class OnboardingApiTests(TestCase):
         cls.term = _make_term('T1')
 
     def setUp(self):
-        self.student = Student.objects.create(user=_make_user())
+        # The Student post_save receiver seeds onboarding at creation
+        # (cis.signals.onboarding.seed_on_student_created). These tests are
+        # about add_step/complete_step counter arithmetic, so the fixture is
+        # built with the receiver's active-term lookup returning None, which
+        # is its documented no-op path. The auto-seed itself is covered by
+        # cis.tests.test_two_phase_onboarding_seeding.
+        with patch('cis.signals.onboarding.active_term', return_value=None):
+            self.student = Student.objects.create(user=_make_user())
         active_term_patcher = patch('student_onboarding.student_onboarding.api.active_term', return_value=self.term)
         active_term_patcher.start()
         self.addCleanup(active_term_patcher.stop)
@@ -125,7 +132,11 @@ class OnboardingSignalReceiverTests(TestCase):
         cls.term = _make_term('T2')
 
     def setUp(self):
-        self.student = Student.objects.create(user=_make_user())
+        # See OnboardingApiTests.setUp: suppress the Student post_save
+        # receiver during fixture creation so these event-wiring tests exert
+        # full control over when seeding happens, via explicit _send() calls.
+        with patch('cis.signals.onboarding.active_term', return_value=None):
+            self.student = Student.objects.create(user=_make_user())
         active_term_patcher = patch('student_onboarding.student_onboarding.api.active_term', return_value=self.term)
         active_term_patcher.start()
         self.addCleanup(active_term_patcher.stop)
@@ -646,7 +657,13 @@ class PendingNotificationDetailViewTests(TestCase):
         cls.term = _make_term('PD1')
 
     def setUp(self):
-        self.student = Student.objects.create(user=_make_user())
+        # See OnboardingApiTests.setUp: suppress the Student post_save
+        # receiver during fixture creation. test_no_onboarding_record_renders_
+        # without_a_row depends on a student with genuinely no onboarding
+        # record, and the other tests here build their own record explicitly
+        # via api.add_step, so the auto-seed would only be noise.
+        with patch('cis.signals.onboarding.active_term', return_value=None):
+            self.student = Student.objects.create(user=_make_user())
         p = patch('student_onboarding.student_onboarding.api.active_term',
                   return_value=self.term)
         p.start(); self.addCleanup(p.stop)
