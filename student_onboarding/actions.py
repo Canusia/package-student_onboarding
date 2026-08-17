@@ -6,10 +6,15 @@ dropdown on the CE student detail page, alongside the actions cis registers
 itself. `mou` is the precedent for a packaged app importing
 `myce.component_registry`.
 
-The handler mirrors cis's `download_student_pdf`: read the selected id from
-`ids[]` and return an `open` outcome pointing at an existing view, rather
-than rendering anything here.
+The handler reads the selected id from `ids[]` and returns a `redirect`
+outcome pointing at an existing view, rather than rendering anything here.
+It deliberately does NOT use the `open` outcome that cis's
+`download_student_pdf` uses: a PDF belongs in its own tab, but this is a page
+staff read and come back from, so it navigates in place and carries a `back`
+parameter the target renders as a Back button.
 """
+from urllib.parse import urlencode
+
 from django.http import JsonResponse
 from django.urls import reverse
 
@@ -32,8 +37,16 @@ def pending_onboarding_preview(request):
             'title': 'Error',
             'message': 'No record selected.',
         })
+    target = reverse('student_onboarding_ce:pending_notification_detail',
+                     args=[ids[0]])
+    try:
+        back = reverse('cis:student', args=[ids[0]])
+    except Exception:
+        # A deployment without the cis student page still gets the preview,
+        # just without a Back button.
+        back = ''
+
     return JsonResponse({
-        'outcome': 'open',
-        'url': reverse('student_onboarding_ce:pending_notification_detail',
-                       args=[ids[0]]),
+        'outcome': 'redirect',
+        'url': f'{target}?{urlencode({"back": back})}' if back else target,
     })

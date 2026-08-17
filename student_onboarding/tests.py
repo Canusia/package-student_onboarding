@@ -1,5 +1,6 @@
 import datetime
 import json
+from urllib.parse import quote
 import uuid
 from unittest.mock import patch, MagicMock
 
@@ -775,6 +776,30 @@ class PendingNotificationDetailViewTests(TestCase):
             reverse('student_onboarding_ce:pending_notifications'))
         self.assertEqual(response.headers.get('X-Frame-Options'), 'DENY')
 
+    def test_back_url_is_rendered_when_supplied(self):
+        back = reverse('cis:student', args=[self.student.id])
+        response = self.client.get(self._url() + '?back=' + back)
+        self.assertEqual(response.context['back_url'], back)
+        self.assertContains(response, 'Back to Student Record')
+
+    def test_no_back_button_without_the_param(self):
+        # Reached from the list page's details modal - nothing to go back to.
+        response = self.client.get(self._url())
+        self.assertEqual(response.context['back_url'], '')
+        self.assertNotContains(response, 'Back to Student Record')
+
+    def test_offsite_back_url_is_rejected(self):
+        # back is rendered as an href; an unchecked value would be an open
+        # redirect out of the application.
+        response = self.client.get(self._url() + '?back=https://evil.example.com/x')
+        self.assertEqual(response.context['back_url'], '')
+
+    def test_send_now_redirect_preserves_the_query_string(self):
+        back = reverse('cis:student', args=[self.student.id])
+        response = self.client.post(self._url() + '?back=' + back, follow=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('back=', response['Location'])
+
 class PendingNotificationsViewTests(TestCase):
     @classmethod
     def setUpClass(cls):
@@ -897,19 +922,26 @@ class PendingOnboardingActionTests(TestCase):
                  for slug in group['actions'].keys()]
         self.assertIn('pending_onboarding_preview', slugs)
 
-    def test_action_returns_open_outcome_with_the_detail_url(self):
+    def test_action_returns_a_same_tab_redirect_with_a_back_param(self):
+        # 'redirect', not 'open': this is a page staff read and come back
+        # from, so it navigates in place and carries a back link, unlike
+        # cis's download_student_pdf which belongs in its own tab.
         from student_onboarding.student_onboarding.actions import (
             pending_onboarding_preview,
         )
         student = Student.objects.create(user=_make_user())
         request = RequestFactory().post('/', {'ids[]': [str(student.id)]})
-        response = pending_onboarding_preview(request)
-        payload = json.loads(response.content)
-        self.assertEqual(payload['outcome'], 'open')
-        self.assertEqual(
-            payload['url'],
+        payload = json.loads(pending_onboarding_preview(request).content)
+
+        self.assertEqual(payload['outcome'], 'redirect')
+        self.assertIn(
             reverse('student_onboarding_ce:pending_notification_detail',
                     args=[student.id]),
+            payload['url'],
+        )
+        self.assertIn(
+            'back=' + quote(reverse('cis:student', args=[student.id]), safe=''),
+            payload['url'],
         )
 
     def test_action_errors_when_nothing_is_selected(self):
@@ -1110,4 +1142,5 @@ class MenuMigrationTests(TestCase):
         module.add_menu_item(self._fake_apps(), None)
         module.remove_menu_item(self._fake_apps(), None)
         self.assertEqual(self._read_menu()[0]['sub_menu'], [])
+
 

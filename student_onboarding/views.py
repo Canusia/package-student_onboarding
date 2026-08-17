@@ -4,6 +4,7 @@ import datetime
 
 from django.db.models import Count, Q, Max, F, Prefetch
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.clickjacking import xframe_options_exempt
 from rest_framework import viewsets, views
 from rest_framework.response import Response
@@ -287,9 +288,16 @@ def pending_notification_detail(request, student_id):
             services.send_notifications(
                 plan.sendable, config=plan.config, term=plan.term)
             messages.success(request, 'Reminder sent.')
-        return redirect(reverse(
+        # Preserve the query string: it carries `back` (so the Back button
+        # survives a send) and `term_id` (so the page keeps showing the term
+        # that was just acted on, rather than silently reverting to the
+        # active term).
+        target = reverse(
             'student_onboarding_ce:pending_notification_detail',
-            args=[student_id]))
+            args=[student_id])
+        if request.META.get('QUERY_STRING'):
+            target = f"{target}?{request.META['QUERY_STRING']}"
+        return redirect(target)
 
     plan = services.build_plan(
         term=term, only_student=str(student_id), force=True)
@@ -315,11 +323,19 @@ def pending_notification_detail(request, student_id):
             row.html_body = preview_row.html_body
             row.to_email = preview_row.to_email
 
+    # `back` is rendered as an href, so only same-origin relative paths are
+    # accepted -- an unchecked value here would be an open redirect.
+    back_url = request.GET.get('back', '')
+    if not url_has_allowed_host_and_scheme(
+            back_url, allowed_hosts=None, require_https=False):
+        back_url = ''
+
     return render(
         request, 'student_onboarding/ce/pending_notification_detail.html', {
             'page_title': 'Onboarding Reminder',
             'student': student,
             'row': row,
+            'back_url': back_url,
             'term': term,
             'skip_reason': skip_reason,
             'debug_mode': False if skip_reason else plan.debug_mode,
