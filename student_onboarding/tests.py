@@ -1,4 +1,5 @@
 import datetime
+import importlib.util
 import json
 from urllib.parse import quote
 import uuid
@@ -22,6 +23,17 @@ try:
     from django_login_history.models import post_login as _login_history_post_login
 except Exception:
     _login_history_post_login = None
+
+
+# This package's importable path. It is nested where the tenant checks the
+# repo out as an in-tree editable submodule and flat where it is pip
+# installed; the suite ships in the wheel, so it runs in both. Relative
+# imports handle themselves — `PKG` is for the strings `mock.patch` needs.
+PKG = (
+    'student_onboarding.student_onboarding'
+    if importlib.util.find_spec('student_onboarding.student_onboarding')
+    else 'student_onboarding'
+)
 
 
 def _send(event, student):
@@ -60,7 +72,7 @@ class OnboardingApiTests(TestCase):
         # cis.tests.test_two_phase_onboarding_seeding.
         with patch('cis.signals.onboarding.active_term', return_value=None):
             self.student = Student.objects.create(user=_make_user())
-        active_term_patcher = patch('student_onboarding.student_onboarding.api.active_term', return_value=self.term)
+        active_term_patcher = patch(f'{PKG}.api.active_term', return_value=self.term)
         active_term_patcher.start()
         self.addCleanup(active_term_patcher.stop)
 
@@ -137,7 +149,7 @@ class OnboardingSignalReceiverTests(TestCase):
         # full control over when seeding happens, via explicit _send() calls.
         with patch('cis.signals.onboarding.active_term', return_value=None):
             self.student = Student.objects.create(user=_make_user())
-        active_term_patcher = patch('student_onboarding.student_onboarding.api.active_term', return_value=self.term)
+        active_term_patcher = patch(f'{PKG}.api.active_term', return_value=self.term)
         active_term_patcher.start()
         self.addCleanup(active_term_patcher.stop)
         cis_active_patcher = patch(
@@ -209,7 +221,7 @@ class OnboardingSignalReceiverTests(TestCase):
         # term and the rollover is never simulated at all.
         new_term = _make_term('T3')
         with patch('cis.signals.onboarding.active_term', return_value=new_term), \
-             patch('student_onboarding.student_onboarding.api.active_term', return_value=new_term), \
+             patch(f'{PKG}.api.active_term', return_value=new_term), \
              patch('myce_tenant_configs.services.onboarding_steps.active_term', return_value=new_term):
             request = RequestFactory().get('/', HTTP_USER_AGENT='test-agent')
             user_logged_in.send(
@@ -264,10 +276,10 @@ class NotifyActionTests(TestCase):
 
     def setUp(self):
         self.student = Student.objects.create(user=_make_user())
-        p = patch('student_onboarding.student_onboarding.api.active_term',
+        p = patch(f'{PKG}.api.active_term',
                   return_value=self.term)
         p.start(); self.addCleanup(p.stop)
-        p2 = patch('student_onboarding.student_onboarding.management.commands.'
+        p2 = patch(f'{PKG}.management.commands.'
                    'notify_pending_onboarding.active_term', return_value=self.term)
         p2.start(); self.addCleanup(p2.stop)
 
@@ -288,7 +300,7 @@ class NotifyActionTests(TestCase):
         }
 
     def _run_cmd(self, dry_run, missing_items):
-        from student_onboarding.student_onboarding.management.commands.\
+        from .management.commands.\
             notify_pending_onboarding import Command
         fake_settings = MagicMock()
         fake_settings.from_db.return_value = self._config(missing_items)
@@ -331,7 +343,7 @@ class BuildPlanTests(TestCase):
 
     def setUp(self):
         self.student = Student.objects.create(user=_make_user())
-        p = patch('student_onboarding.student_onboarding.api.active_term',
+        p = patch(f'{PKG}.api.active_term',
                   return_value=self.term)
         p.start(); self.addCleanup(p.stop)
 
@@ -351,14 +363,14 @@ class BuildPlanTests(TestCase):
         return form
 
     def _plan(self, **overrides):
-        from student_onboarding.student_onboarding import services
+        from . import services
         return services.build_plan(
             term=self.term,
             settings_form=self._settings_form(**overrides),
         )
 
     def test_pending_selected_step_is_sendable(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         plan = self._plan()
         self.assertEqual(len(plan.sendable), 1)
@@ -371,7 +383,7 @@ class BuildPlanTests(TestCase):
         # no step is pending. Built with queryset.update() so the api helpers'
         # recompute_completion() does not stamp completed_on and lift the row
         # out of build_plan's queryset entirely.
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         onboarding = StudentOnboarding.objects.get(
             student=self.student, term=self.term)
@@ -386,7 +398,7 @@ class BuildPlanTests(TestCase):
         )
 
     def test_unselected_step_is_no_match(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='classes', label='Register')
         plan = self._plan(missing_items=['ferpa'])
         self.assertEqual(plan.sendable, [])
@@ -396,7 +408,7 @@ class BuildPlanTests(TestCase):
         )
 
     def test_recently_notified_is_rate_limited(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         onboarding = StudentOnboarding.objects.get(
             student=self.student, term=self.term)
@@ -410,7 +422,7 @@ class BuildPlanTests(TestCase):
         )
 
     def test_ignore_rate_limit_makes_it_sendable_again(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         onboarding = StudentOnboarding.objects.get(
             student=self.student, term=self.term)
@@ -441,12 +453,12 @@ class BuildPlanTests(TestCase):
         self.assertEqual(row.subject, 'Finish your onboarding')
 
     def test_inactive_returns_skip_reason(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         self.assertEqual(self._plan(is_active='No'), services.SKIP_INACTIVE)
 
     def test_force_overrides_inactive(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         plan = services.build_plan(
             term=self.term, settings_form=self._settings_form(is_active='No'),
@@ -455,14 +467,14 @@ class BuildPlanTests(TestCase):
         self.assertEqual(len(plan.sendable), 1)
 
     def test_no_active_term_returns_skip_reason(self):
-        from student_onboarding.student_onboarding import services
-        with patch('student_onboarding.student_onboarding.services.active_term',
+        from . import services
+        with patch(f'{PKG}.services.active_term',
                    return_value=None):
             result = services.build_plan(settings_form=self._settings_form())
         self.assertEqual(result, services.SKIP_NO_TERM)
 
     def test_get_pending_notifications_returns_sendable_rows(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         rows = services.get_pending_notifications(
             term=self.term, settings_form=self._settings_form())
@@ -470,7 +482,7 @@ class BuildPlanTests(TestCase):
         self.assertEqual(rows[0].student.id, self.student.id)
 
     def test_send_notifications_sends_and_stamps(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         plan = self._plan()
         mailer = MagicMock()
@@ -486,7 +498,7 @@ class BuildPlanTests(TestCase):
         self.assertIsNotNone(onboarding.last_notified_on)
 
     def test_send_notifications_dry_run_does_not_send(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         plan = self._plan()
         mailer = MagicMock()
@@ -511,16 +523,16 @@ class NotifyCommandSummaryTests(TestCase):
 
     def setUp(self):
         self.student = Student.objects.create(user=_make_user())
-        p = patch('student_onboarding.student_onboarding.api.active_term',
+        p = patch(f'{PKG}.api.active_term',
                   return_value=self.term)
         p.start(); self.addCleanup(p.stop)
-        p2 = patch('student_onboarding.student_onboarding.management.commands.'
+        p2 = patch(f'{PKG}.management.commands.'
                    'notify_pending_onboarding.active_term',
                    return_value=self.term)
         p2.start(); self.addCleanup(p2.stop)
 
     def _run(self, dry_run=True, **config_overrides):
-        from student_onboarding.student_onboarding.management.commands.\
+        from .management.commands.\
             notify_pending_onboarding import Command
         config = {
             'is_active': 'Debug',
@@ -585,8 +597,8 @@ class NotifyCommandSummaryTests(TestCase):
         # DECISION_NO_EMAIL argument order) -- a concatenation would emit
         # [second, self.student] where the real walk order is
         # [self.student, second].
-        from student_onboarding.student_onboarding import services
-        from student_onboarding.student_onboarding.management.commands.\
+        from . import services
+        from .management.commands.\
             notify_pending_onboarding import Command
 
         self.student.user.email = ''
@@ -634,9 +646,9 @@ class NotifyCommandSummaryTests(TestCase):
         # active term" case), so both call sites need to agree here. In
         # production they're the same unmocked function, so this only
         # matters under test.
-        with patch('student_onboarding.student_onboarding.management.commands.'
+        with patch(f'{PKG}.management.commands.'
                    'notify_pending_onboarding.active_term', return_value=None), \
-             patch('student_onboarding.student_onboarding.services.active_term',
+             patch(f'{PKG}.services.active_term',
                    return_value=None):
             summary, log = self._run()
         self.assertEqual(summary, 'No active term. Skipped.')
@@ -669,10 +681,10 @@ class PendingNotificationDetailViewTests(TestCase):
         # via api.add_step, so the auto-seed would only be noise.
         with patch('cis.signals.onboarding.active_term', return_value=None):
             self.student = Student.objects.create(user=_make_user())
-        p = patch('student_onboarding.student_onboarding.api.active_term',
+        p = patch(f'{PKG}.api.active_term',
                   return_value=self.term)
         p.start(); self.addCleanup(p.stop)
-        p2 = patch('student_onboarding.student_onboarding.views.active_term',
+        p2 = patch(f'{PKG}.views.active_term',
                    return_value=self.term)
         p2.start(); self.addCleanup(p2.stop)
 
@@ -689,7 +701,7 @@ class PendingNotificationDetailViewTests(TestCase):
             'pending_app_email': 'Hi {{student_first_name}}: {{missing_items}}',
             'add_note': 'No',
         }
-        p3 = patch('student_onboarding.student_onboarding.services._load_config',
+        p3 = patch(f'{PKG}.services._load_config',
                    side_effect=lambda settings_form=None: self.config)
         p3.start(); self.addCleanup(p3.stop)
 
@@ -698,7 +710,7 @@ class PendingNotificationDetailViewTests(TestCase):
                        args=[self.student.id])
 
     def test_shows_rendered_email_for_a_sendable_student(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         response = self.client.get(self._url())
         self.assertEqual(response.status_code, 200)
@@ -707,7 +719,7 @@ class PendingNotificationDetailViewTests(TestCase):
         self.assertContains(response, 'FERPA')
 
     def test_explains_why_a_rate_limited_student_is_excluded(self):
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         onboarding = StudentOnboarding.objects.get(
             student=self.student, term=self.term)
@@ -722,7 +734,7 @@ class PendingNotificationDetailViewTests(TestCase):
         """A rate-limited student is the common case, not an edge case -
         the operator must be able to see exactly what Send Now would mail
         before clicking it, even though the row is not sendable."""
-        from student_onboarding.student_onboarding import services
+        from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
         onboarding = StudentOnboarding.objects.get(
             student=self.student, term=self.term)
@@ -751,7 +763,7 @@ class PendingNotificationDetailViewTests(TestCase):
         onboarding.save(update_fields=['last_notified_on'])
         before = onboarding.last_notified_on
 
-        with patch('student_onboarding.student_onboarding.services'
+        with patch(f'{PKG}.services'
                    '.send_notifications') as mock_send:
             mock_send.return_value = {'sent': [{'student_id': str(self.student.id)}],
                                       'by_step': {'ferpa': 1}}
@@ -767,7 +779,7 @@ class PendingNotificationDetailViewTests(TestCase):
 
     def test_send_now_really_sends_when_not_mocked(self):
         api.add_step(self.student, key='ferpa', label='FERPA')
-        with patch('student_onboarding.student_onboarding.services'
+        with patch(f'{PKG}.services'
                    '.send_html_mail', create=True):
             with patch('mailer.send_html_mail') as mailer:
                 self.client.post(self._url(), follow=True)
@@ -777,7 +789,7 @@ class PendingNotificationDetailViewTests(TestCase):
         mailer.assert_called_once()
 
     def test_send_now_does_nothing_when_student_has_no_pending_items(self):
-        with patch('student_onboarding.student_onboarding.services'
+        with patch(f'{PKG}.services'
                    '.send_notifications') as mock_send:
             self.client.post(self._url(), follow=True)
         mock_send.assert_not_called()
@@ -791,9 +803,9 @@ class PendingNotificationDetailViewTests(TestCase):
         """The detail template's <form method="post"> has no `action`, so a
         term_id carried on the page URL must survive the POST and drive
         which term's plan gets built and sent."""
-        from student_onboarding.student_onboarding import services
+        from . import services
         other_term = _make_term('PD2')
-        with patch('student_onboarding.student_onboarding.services'
+        with patch(f'{PKG}.services'
                    '.build_plan', wraps=services.build_plan) as mock_build:
             self.client.post(f'{self._url()}?term_id={other_term.id}')
         # Every call the POST handler makes to build_plan (including the
@@ -871,10 +883,10 @@ class PendingNotificationsViewTests(TestCase):
 
     def setUp(self):
         self.student = Student.objects.create(user=_make_user())
-        p = patch('student_onboarding.student_onboarding.api.active_term',
+        p = patch(f'{PKG}.api.active_term',
                   return_value=self.term)
         p.start(); self.addCleanup(p.stop)
-        p2 = patch('student_onboarding.student_onboarding.views.active_term',
+        p2 = patch(f'{PKG}.views.active_term',
                    return_value=self.term)
         p2.start(); self.addCleanup(p2.stop)
 
@@ -897,7 +909,7 @@ class PendingNotificationsViewTests(TestCase):
         config.update(overrides)
         form = MagicMock()
         form.from_db.return_value = config
-        p = patch('student_onboarding.student_onboarding.services._load_config',
+        p = patch(f'{PKG}.services._load_config',
                   return_value=config)
         p.start(); self.addCleanup(p.stop)
 
@@ -976,7 +988,7 @@ class PendingOnboardingActionTests(TestCase):
         # 'redirect', not 'open': this is a page staff read and come back
         # from, so it navigates in place and carries a back link, unlike
         # cis's download_student_pdf which belongs in its own tab.
-        from student_onboarding.student_onboarding.actions import (
+        from .actions import (
             pending_onboarding_preview,
         )
         student = Student.objects.create(user=_make_user())
@@ -995,7 +1007,7 @@ class PendingOnboardingActionTests(TestCase):
         )
 
     def test_action_errors_when_nothing_is_selected(self):
-        from student_onboarding.student_onboarding.actions import (
+        from .actions import (
             pending_onboarding_preview,
         )
         request = RequestFactory().post('/', {})
@@ -1065,10 +1077,10 @@ class PendingNotificationCampusGateTests(TestCase):
         )
         api.add_step(self.student, key='ferpa', label='FERPA')
 
-        p = patch('student_onboarding.student_onboarding.api.active_term',
+        p = patch(f'{PKG}.api.active_term',
                   return_value=self.term)
         p.start(); self.addCleanup(p.stop)
-        p2 = patch('student_onboarding.student_onboarding.views.active_term',
+        p2 = patch(f'{PKG}.views.active_term',
                    return_value=self.term)
         p2.start(); self.addCleanup(p2.stop)
 
@@ -1081,7 +1093,7 @@ class PendingNotificationCampusGateTests(TestCase):
             'pending_app_email': 'Hi {{student_first_name}}: {{missing_items}}',
             'add_note': 'No',
         }
-        p3 = patch('student_onboarding.student_onboarding.services._load_config',
+        p3 = patch(f'{PKG}.services._load_config',
                    side_effect=lambda settings_form=None: self.config)
         p3.start(); self.addCleanup(p3.stop)
 
@@ -1102,7 +1114,7 @@ class PendingNotificationCampusGateTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_post_detail_404s_and_sends_nothing_for_out_of_scope_student(self):
-        with patch('student_onboarding.student_onboarding.services'
+        with patch(f'{PKG}.services'
                    '.send_notifications') as mock_send:
             response = self.client.post(self._detail_url())
         self.assertEqual(response.status_code, 404)
@@ -1127,7 +1139,7 @@ class MenuMigrationTests(TestCase):
     def _menu_module(self):
         import importlib
         return importlib.import_module(
-            'student_onboarding.student_onboarding.migrations'
+            f'{PKG}.migrations'
             '.0003_menu_pending_onboarding')
 
     def _fake_apps(self):
@@ -1194,3 +1206,29 @@ class MenuMigrationTests(TestCase):
         self.assertEqual(self._read_menu()[0]['sub_menu'], [])
 
 
+
+
+class NoHardcodedPackagePrefixTests(TestCase):
+    """This file must not spell out the nested package path.
+
+    It ships inside the wheel and runs in both deployment shapes: nested
+    where the tenant checks the repo out as an in-tree editable submodule,
+    flat where it is pip installed. Hardcoding the nested prefix is how 67 of
+    70 tests came to error on every pip-only tenant. Use a relative import,
+    or `PKG` where a string is required.
+    """
+
+    NESTED = 'student_onboarding' + '.student_onboarding'
+
+    def test_no_import_or_patch_target_spells_out_the_nested_prefix(self):
+        with open(__file__.replace('.pyc', '.py'), encoding='utf-8') as fh:
+            source = fh.readlines()
+
+        offenders = [
+            f'{lineno}: {line.strip()}'
+            for lineno, line in enumerate(source, 1)
+            if self.NESTED in line
+            and ('patch(' in line
+                 or line.lstrip().startswith(('from ', 'import ')))
+        ]
+        self.assertEqual(offenders, [], '\n'.join(offenders))
