@@ -135,9 +135,18 @@ docker exec -w /app/webapp django_web_ewu python manage.py test student_onboardi
 
 The container working directory is `/app/webapp` (the `webapp/manage.py` form in the repo CLAUDE.md is wrong for this container — use `-w /app/webapp` and `python manage.py ...`).
 
-When patching `active_term` in tests, patch the **inner** path `student_onboarding.student_onboarding.api.active_term` (and `myce_tenant_configs.services.onboarding_steps.active_term` separately).
+When patching `active_term` in tests, build the target from `PKG` — `patch(f'{PKG}.api.active_term', …)`. `PKG` is defined at the top of `tests.py` and resolves to `student_onboarding.student_onboarding` in a repo that carries this as an in-tree editable submodule and to `student_onboarding` where it is pip-installed; the suite ships in the wheel and runs in both. Hardcoding the nested path is what made 67 of 70 tests error on every pip-only tenant. Patch `myce_tenant_configs.services.onboarding_steps.active_term` separately.
 
 Mocking the `user_logged_in` signal in tests must include `HTTP_USER_AGENT` on the request because `django_login_history` reads it.
+
+## Releasing
+
+**Bump `version` in `setup.cfg` and `pyproject.toml` to the tag you are about to cut, in the
+commit you tag.** pip keys upgrades off that string: while it stayed at `0.1` / `0.0.1`,
+every tag looked like the installed version, so `pip install -r requirements.txt` treated the
+requirement as satisfied and kept the old code even though the tenant's pin had moved — no
+error, no warning, and only `--force-reinstall` got the new code in. Then bump the tenant's
+`webapp/requirements.txt` pin (`@vX.Y.Z`) and the submodule pointer together.
 
 ## Common pitfalls
 
