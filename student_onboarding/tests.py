@@ -1,6 +1,7 @@
 import datetime
 import importlib.util
 import json
+import re
 from urllib.parse import quote
 import uuid
 from unittest.mock import patch, MagicMock
@@ -1232,3 +1233,84 @@ class NoHardcodedPackagePrefixTests(TestCase):
                  or line.lstrip().startswith(('from ', 'import ')))
         ]
         self.assertEqual(offenders, [], '\n'.join(offenders))
+
+
+class ByStudentTableSearchTests(TestCase):
+    """Search/sort on the CE "Onboarding by Student" table (#7).
+
+    rest_framework_datatables' get_fields() stops reading columns at the first
+    column whose `data` is empty, and DataTables sends a `data: null` column as
+    `columns[i][data]=`. A leading `data: null` checkbox column made the
+    backend see zero columns, so global search, column search and ordering
+    were all silently ignored. columns[] here is built from the template
+    source, the way the browser builds it.
+    """
+    TEMPLATE = 'student_onboarding/ce/_tab_by_student.html'
+    COLUMN_RE = re.compile(
+        r"\{\s*data:\s*(?:null|'(?P<data>[^']*)')"
+        r"(?:\s*,\s*name:\s*'(?P<name>[^']*)')?")
+
+    @classmethod
+    def setUpClass(cls):
+        if _login_history_post_login is not None:
+            user_logged_in.disconnect(_login_history_post_login)
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        if _login_history_post_login is not None:
+            user_logged_in.connect(_login_history_post_login)
+
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        ce, _ = Group.objects.get_or_create(name='ce')
+        cls.term = _make_term('BYSTU')
+        cls.admin = CustomUser.objects.create_superuser(
+            username=f'admin-{uuid.uuid4()}', email=f'{uuid.uuid4()}@example.com',
+            password='x')
+        cls.admin.groups.add(ce)
+
+    def setUp(self):
+        with patch('cis.signals.onboarding.active_term', return_value=None):
+            alpha = Student.objects.create(user=_make_user(last_name='Alphaname'))
+            beta = Student.objects.create(user=_make_user(last_name='Betaname'))
+        with patch(f'{PKG}.api.active_term', return_value=self.term):
+            for student in (alpha, beta):
+                api.add_step(student, key='ferpa', label='FERPA')
+        self.client.force_login(self.admin)
+
+    @classmethod
+    def _columns(cls):
+        from django.template.loader import get_template
+        source = get_template(cls.TEMPLATE).template.source
+        block = source[source.index('columns: ['):]
+        block = block[:block.index('\n                    ]')]
+        return [(m.group('data') or '', m.group('name') or '')
+                for m in cls.COLUMN_RE.finditer(block)]
+
+    def _filtered(self, search):
+        params = {'format': 'datatables', 'term_id': str(self.term.id), 'draw': '1',
+                  'start': '0', 'length': '30', 'search[value]': search,
+                  'search[regex]': 'false'}
+        for i, (data, name) in enumerate(self._columns()):
+            params[f'columns[{i}][data]'] = data
+            params[f'columns[{i}][name]'] = name
+            params[f'columns[{i}][searchable]'] = 'true' if name else 'false'
+            params[f'columns[{i}][orderable]'] = 'true' if name else 'false'
+            params[f'columns[{i}][search][value]'] = ''
+            params[f'columns[{i}][search][regex]'] = 'false'
+        resp = self.client.get('/ce/onboarding/api/by_student/', params,
+                               REMOTE_ADDR='127.0.0.1')
+        self.assertEqual(resp.status_code, 200, resp.content[:400])
+        body = resp.json()
+        return body['recordsTotal'], body['recordsFiltered']
+
+    def test_no_column_sends_empty_data(self):
+        self.assertTrue(all(data for data, _name in self._columns()),
+                        msg=self._columns())
+
+    def test_global_search_filters_rows(self):
+        self.assertEqual(self._filtered('Betaname'), (2, 1))
+        self.assertEqual(self._filtered('zzqqnomatch'), (2, 0))

@@ -106,7 +106,13 @@
                         }
                     ],
                     columns: [
-                        { data: null, defaultContent: '', orderable: false, searchable: false },
+                        // Must send a non-empty data key: rest_framework_datatables stops
+                        // reading columns at the first empty one, so `data: null` here
+                        // silently dropped all search and ordering (#7).
+                        {
+                            data: 'student_id', defaultContent: '', orderable: false, searchable: false,
+                            render: function () { return ''; }
+                        },
                         { data: 'started_on', name: 'started_on' },
                         { data: 'last_name', name: 'student.user.last_name' },
                         { data: 'first_name', name: 'student.user.first_name' },
