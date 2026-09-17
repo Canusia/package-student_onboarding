@@ -23,10 +23,12 @@ from .serializers import OnboardingByStudentSerializer
 def _resolve_term(request):
     term_id = request.GET.get('term_id', '').strip()
     if term_id:
+        from django.core.exceptions import ValidationError
         from cis.models.term import Term
         try:
             return Term.objects.get(id=term_id)
-        except Term.DoesNotExist:
+        except (Term.DoesNotExist, ValidationError, ValueError):
+            # An empty term <select> sends the string 'null' (#3).
             pass
     return active_term()
 

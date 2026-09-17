@@ -1352,3 +1352,17 @@ class StudentRegisPendingFormTests(TestCase):
     def test_legacy_numeric_initial_is_shown_as_yes_no(self):
         self.assertEqual(self._form({'add_note': '1'}).initial['add_note'], 'Yes')
         self.assertEqual(self._form({'add_note': '2'}).initial['add_note'], 'No')
+
+
+class ResolveTermTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.term = _make_term('RT1')
+
+    def test_malformed_term_id_falls_back_to_active_term(self):
+        from .views import _resolve_term
+        with patch(f'{PKG}.views.active_term', return_value=self.term):
+            for bad in ('null', 'not-a-uuid', '123'):
+                with self.subTest(term_id=bad):
+                    request = RequestFactory().get('/', {'term_id': bad})
+                    self.assertEqual(_resolve_term(request), self.term)
