@@ -15,6 +15,10 @@ from django.utils import timezone
 from cis.models.customuser import CustomUser
 from cis.models.term import AcademicYear, Term
 from cis.models.student import Student
+from django.conf import settings as dj_settings
+from cis.models.course import Campus, Cohort, Course
+from cis.models.section import ClassSection, StudentRegistration
+from cis.models.highschool import HighSchool
 
 from student_onboarding import api, events
 from student_onboarding.models import StudentOnboarding, StudentOnboardingStep
@@ -1376,3 +1380,113 @@ class ByStudentTabTemplateTests(TestCase):
             'student_onboarding/ce/_tab_by_student.html', {'terms': []})
         self.assertNotIn('student_bulk_actions_url', html)
         self.assertIn(reverse('cis:student_bulk_actions'), html)
+
+
+class OnboardingCampusScopeTests(TestCase):
+    """#6: a campus-restricted CE user sees only students at their campuses."""
+
+    @classmethod
+    def setUpClass(cls):
+        if _login_history_post_login is not None:
+            user_logged_in.disconnect(_login_history_post_login)
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        if _login_history_post_login is not None:
+            user_logged_in.connect(_login_history_post_login)
+
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        Group.objects.get_or_create(name='ce')
+        # Registration signals write a student note as the 'cron' user.
+        if not CustomUser.objects.filter(username='cron').exists():
+            _make_user(username='cron')
+        cls.term = _make_term('CS1')
+        prefix = dj_settings.CAMPUS_CODE_PREFIX
+        cls.campus_a = Campus.objects.create(name='A', code=f'{prefix}-a-{uuid.uuid4().hex[:6]}')
+        cls.campus_b = Campus.objects.create(name='B', code=f'{prefix}-b-{uuid.uuid4().hex[:6]}')
+        cohort = Cohort.objects.create(name=f'Co-{uuid.uuid4().hex[:6]}', designator='CO')
+        cls.hs = HighSchool.objects.create(name=f'HS-{uuid.uuid4().hex[:6]}')
+        cls.section = {}
+        for key, campus in (('a', cls.campus_a), ('b', cls.campus_b)):
+            course = Course.objects.create(
+                catalog_number=f'1{key}', title=key, cohort=cohort, campus=campus)
+            cls.section[key] = ClassSection.objects.create(
+                class_number=f'CS-{key}-{uuid.uuid4().hex[:6]}', term=cls.term, course=course)
+
+    def setUp(self):
+        with patch('cis.signals.onboarding.active_term', return_value=None):
+            self.student_a = self._student('a')
+            self.student_b = self._student('b')
+        with patch(f'{PKG}.api.active_term', return_value=self.term):
+            for s in (self.student_a, self.student_b):
+                api.add_step(s, key='ferpa', label='FERPA')
+        StudentOnboarding.objects.filter(term=self.term).update(
+            started_on=timezone.now() - datetime.timedelta(days=30))
+
+        self.ce_a = _make_user(email=f'ce-{uuid.uuid4()}@example.com')
+        self.ce_a.groups.add(Group.objects.get(name='ce'))
+        self.ce_a.campus = {'process_campus': [str(self.campus_a.id)]}
+        self.ce_a.save()
+
+    def _student(self, key):
+        student = Student.objects.create(
+            user=_make_user(), account_verified=True, highschool=self.hs)
+        StudentRegistration.objects.create(
+            student=student, class_section=self.section[key], status='applied',
+            status_changed_on={'applied_on': '01/01/2026'})
+        return student
+
+    def _get(self, name, user, **params):
+        self.client.force_login(user)
+        params.setdefault('term_id', str(self.term.id))
+        return self.client.get(reverse(f'student_onboarding_ce:{name}'), params)
+
+    def test_by_student_hides_other_campus_students(self):
+        rows = self._get('onboarding_by_student-list', self.ce_a, format='json').json()
+        rows = rows['results'] if isinstance(rows, dict) else rows
+        self.assertEqual({r['student_id'] for r in rows}, {str(self.student_a.id)})
+
+    def test_by_highschool_counts_only_in_scope_students(self):
+        data = self._get('by_highschool', self.ce_a).json()['data']
+        self.assertEqual(sum(r['total'] for r in data), 1)
+
+    def test_stalled_hides_other_campus_students(self):
+        data = self._get('stalled', self.ce_a, days='7').json()['data']
+        self.assertEqual({r['student_id'] for r in data}, {str(self.student_a.id)})
+
+    def test_funnel_counts_only_in_scope_steps(self):
+        rows = self._get('funnel', self.ce_a).json()
+        self.assertEqual(sum(r['pending'] for r in rows), 1)
+
+    def test_superuser_still_sees_everyone(self):
+        admin = _make_user(email=f'su-{uuid.uuid4()}@example.com', is_superuser=True)
+        admin.groups.add(Group.objects.get(name='ce'))
+        data = self._get('stalled', admin, days='7').json()['data']
+        self.assertEqual(len(data), 2)
+
+    def _aggregate_today(self):
+        from django.core.management import call_command
+        call_command('aggregate_onboarding_stats', term=str(self.term.id), stdout=MagicMock())
+
+    def test_timeline_counts_only_in_scope_students(self):
+        self._aggregate_today()
+        rows = self._get('timeline', self.ce_a).json()
+        self.assertEqual(rows[-1]['started_count'], 1)
+
+    def test_timeline_matches_the_stored_rollup_for_a_superuser(self):
+        from .models import DailyOnboardingStats
+        self._aggregate_today()
+        admin = _make_user(email=f'su-{uuid.uuid4()}@example.com', is_superuser=True)
+        admin.groups.add(Group.objects.get(name='ce'))
+        rows = self._get('timeline', admin).json()
+        stored = list(DailyOnboardingStats.objects
+                      .filter(term=self.term, step_key='', highschool__isnull=True)
+                      .order_by('date')
+                      .values('started_count', 'completed_count'))
+        self.assertEqual(
+            [{'started_count': r['started_count'], 'completed_count': r['completed_count']} for r in rows],
+            stored)

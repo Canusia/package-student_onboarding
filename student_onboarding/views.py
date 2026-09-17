@@ -33,6 +33,17 @@ def _resolve_term(request):
     return active_term()
 
 
+def _scope_to_user(records, user, student_path='student'):
+    """Limit student-backed onboarding records to the user's campuses (#6).
+
+    Same rule as the host's All Students tab: superusers and non-ce roles are
+    unchanged; ce staff see unverified students and students registered at a
+    campus they process.
+    """
+    from cis.campus_gate import scope_records_by_student_campus
+    return scope_records_by_student_campus(records, user, student_path=student_path)
+
+
 class OnboardingByStudentViewSet(viewsets.ReadOnlyModelViewSet):
     """Row per StudentOnboarding for the selected term, with progress."""
     serializer_class = OnboardingByStudentSerializer
@@ -58,7 +69,7 @@ class OnboardingByStudentViewSet(viewsets.ReadOnlyModelViewSet):
         elif status == 'pending':
             qs = qs.filter(completed_on__isnull=True)
 
-        return qs
+        return _scope_to_user(qs, self.request.user)
 
 
 class OnboardingByHighSchoolView(views.APIView):
@@ -70,9 +81,10 @@ class OnboardingByHighSchoolView(views.APIView):
         if not term:
             return Response({'data': [], 'recordsTotal': 0, 'recordsFiltered': 0})
 
+        onboardings = _scope_to_user(
+            StudentOnboarding.objects.filter(term=term), request.user)
         rows = (
-            StudentOnboarding.objects
-            .filter(term=term)
+            onboardings
             .values(
                 'student__highschool_id',
                 'student__highschool__name',
@@ -122,8 +134,9 @@ class OnboardingStalledView(views.APIView):
         cutoff = timezone.now() - datetime.timedelta(days=days)
 
         qs = (
-            StudentOnboarding.objects
-            .filter(term=term, completed_on__isnull=True)
+            _scope_to_user(
+                StudentOnboarding.objects.filter(term=term, completed_on__isnull=True),
+                request.user)
             .select_related('student__user', 'student__highschool')
             .annotate(latest_step_completion=Max('steps__completed_on'))
             .filter(
@@ -163,16 +176,36 @@ class OnboardingTimelineView(views.APIView):
         if not term:
             return Response([])
 
-        qs = DailyOnboardingStats.objects.filter(term=term, step_key='')
+        stats = DailyOnboardingStats.objects.filter(term=term, step_key='')
+        onboardings = StudentOnboarding.objects.filter(term=term)
 
         highschool_id = request.GET.get('highschool_id', '').strip()
         if highschool_id:
-            qs = qs.filter(highschool_id=highschool_id)
+            stats = stats.filter(highschool_id=highschool_id)
+            onboardings = onboardings.filter(student__highschool_id=highschool_id)
         else:
-            qs = qs.filter(highschool__isnull=True)
+            stats = stats.filter(highschool__isnull=True)
 
-        qs = qs.order_by('date').values('date', 'started_count', 'completed_count')
-        return Response(list(qs))
+        # Stored rollups are per term/high school, not per campus, so they
+        # cannot be scoped (#6). Keep their dates and recount from scoped rows,
+        # using aggregate_onboarding_stats' definitions.
+        dates = list(stats.order_by('date').values_list('date', flat=True))
+        spans = list(
+            _scope_to_user(onboardings, request.user)
+            .values_list('started_on', 'completed_on'))
+
+        rows = []
+        for date in dates:
+            day_end = timezone.make_aware(
+                datetime.datetime.combine(date, datetime.time.max))
+            rows.append({
+                'date': date,
+                'started_count': sum(
+                    1 for started, _ in spans if started and started <= day_end),
+                'completed_count': sum(
+                    1 for _, completed in spans if completed and completed <= day_end),
+            })
+        return Response(rows)
 
 
 class OnboardingFunnelView(views.APIView):
@@ -189,6 +222,7 @@ class OnboardingFunnelView(views.APIView):
         steps_qs = StudentOnboardingStep.objects.filter(onboarding__term=term)
         if highschool_id:
             steps_qs = steps_qs.filter(onboarding__student__highschool_id=highschool_id)
+        steps_qs = _scope_to_user(steps_qs, request.user, 'onboarding__student')
 
         rows = (
             steps_qs
