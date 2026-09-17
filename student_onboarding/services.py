@@ -273,7 +273,8 @@ def send_notifications(rows, *, config, term, send_html_mail=None,
         from mailer import send_html_mail
 
     allowed_step_keys = _allowed_step_keys(config)
-    add_note = (config.get('add_note') or 'No') == 'Yes'
+    # 'Yes' since #2; '1' is what YES_NO_SELECT_OPTIONS stored before it.
+    add_note = str(config.get('add_note') or 'No') in ('Yes', '1')
     from_email = getattr(dj_settings, 'DEFAULT_FROM_EMAIL', '')
 
     sent = []

@@ -18,7 +18,6 @@ from cis.validators import validate_html_short_code
 from cis.models.crontab import CronTab
 from cis.models.settings import Setting
 from cis.validators import validate_cron, numeric, validate_email_list
-from cis.utils import YES_NO_SELECT_OPTIONS
 
 
 class SettingForm(forms.Form):
@@ -75,7 +74,7 @@ class SettingForm(forms.Form):
     )
 
     add_note = forms.ChoiceField(
-        choices=YES_NO_SELECT_OPTIONS,
+        choices=[('', 'Select'), ('Yes', 'Yes'), ('No', 'No')],
         label='Add Note to Student',
         help_text='Add note to student\'s record after a notification is sent. Note will include missing items'
     )
@@ -104,6 +103,11 @@ class student_regis_pending(SettingForm):
 
     def __init__(self, request, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        # Rows saved before #2 hold YES_NO_SELECT_OPTIONS values.
+        legacy_add_note = {'1': 'Yes', '2': 'No'}
+        if self.initial.get('add_note') in legacy_add_note:
+            self.initial['add_note'] = legacy_add_note[self.initial['add_note']]
 
         # Populate missing_items choices from the step registry (filled by
         # host apps at ready() time).

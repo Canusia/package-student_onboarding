@@ -498,6 +498,29 @@ class BuildPlanTests(TestCase):
             student=self.student, term=self.term)
         self.assertIsNotNone(onboarding.last_notified_on)
 
+    def _send_with_add_note(self, value):
+        from . import services
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        plan = self._plan(add_note=value)
+        with patch.object(Student, 'add_note') as add_note:
+            services.send_notifications(
+                plan.sendable, config=plan.config, term=self.term,
+                send_html_mail=MagicMock())
+        return add_note
+
+    def test_add_note_yes_writes_the_note(self):
+        self.assertEqual(self._send_with_add_note('Yes').call_count, 1)
+
+    def test_add_note_legacy_1_writes_the_note(self):
+        """Rows saved before #2 hold YES_NO_SELECT_OPTIONS' '1'."""
+        self.assertEqual(self._send_with_add_note('1').call_count, 1)
+
+    def test_add_note_no_and_legacy_2_write_nothing(self):
+        for value in ('No', '2', '', None):
+            with self.subTest(value=value):
+                StudentOnboarding.objects.filter(student=self.student).delete()
+                self.assertEqual(self._send_with_add_note(value).call_count, 0)
+
     def test_send_notifications_dry_run_does_not_send(self):
         from . import services
         api.add_step(self.student, key='ferpa', label='FERPA')
@@ -1314,3 +1337,18 @@ class ByStudentTableSearchTests(TestCase):
     def test_global_search_filters_rows(self):
         self.assertEqual(self._filtered('Betaname'), (2, 1))
         self.assertEqual(self._filtered('zzqqnomatch'), (2, 0))
+
+
+class StudentRegisPendingFormTests(TestCase):
+    def _form(self, initial):
+        from .settings.student_regis_pending import student_regis_pending
+        request = RequestFactory().get('/', {'report_id': str(uuid.uuid4())})
+        return student_regis_pending(request, initial=initial)
+
+    def test_add_note_offers_literal_yes_no(self):
+        values = [v for v, _ in self._form({}).fields['add_note'].choices]
+        self.assertEqual(values, ['', 'Yes', 'No'])
+
+    def test_legacy_numeric_initial_is_shown_as_yes_no(self):
+        self.assertEqual(self._form({'add_note': '1'}).initial['add_note'], 'Yes')
+        self.assertEqual(self._form({'add_note': '2'}).initial['add_note'], 'No')
