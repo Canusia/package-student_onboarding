@@ -25,6 +25,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         $(function () {
+            var bulkActionsUrl = '{% url "cis:student_bulk_actions" %}';
             var dt = null;
             var funnelChart = null;
             function apiUrl() {
@@ -63,6 +64,9 @@
                 });
             }
             function init() {
+                if ($.fn.dataTable.isDataTable('#onboarding_by_student_table')) {
+                    return;
+                }
                 loadFunnel();
                 dt = $('#onboarding_by_student_table').DataTable({
                     stateSave: true,
@@ -93,7 +97,7 @@
                             text: '<i class="fa fa-envelope text-white"></i>&nbsp;Send Verification Link',
                             titleAttr: 'Send Verification Link',
                             action: function (e, d) {
-                                ActionRegistry.doBulkAction(student_bulk_actions_url, 'resend_verification_link', d);
+                                ActionRegistry.doBulkAction(bulkActionsUrl, 'resend_verification_link', d);
                             }
                         },
                         {
@@ -101,7 +105,7 @@
                             text: '<i class="fa fa-link text-white"></i>&nbsp;Get Verification Link',
                             titleAttr: 'Get Verification Link',
                             action: function (e, d) {
-                                ActionRegistry.doBulkAction(student_bulk_actions_url, 'get_verification_link', d);
+                                ActionRegistry.doBulkAction(bulkActionsUrl, 'get_verification_link', d);
                             }
                         }
                     ],
@@ -141,7 +145,10 @@
                     ]
                 });
             }
+            // The host shows a deep-linked tab before this callback runs, so
+            // shown.bs.tab may already have fired (#3). init() is idempotent.
             $('a[data-toggle="tab"][href="#onboarding_by_student"]').one('shown.bs.tab', init);
+            if ($('#onboarding_by_student').hasClass('active')) init();
             $('#onboarding_by_student_term').on('change', function () {
                 loadFunnel();
                 if (dt) dt.ajax.url(apiUrl()).load();

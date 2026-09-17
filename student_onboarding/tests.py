@@ -1366,3 +1366,13 @@ class ResolveTermTests(TestCase):
                 with self.subTest(term_id=bad):
                     request = RequestFactory().get('/', {'term_id': bad})
                     self.assertEqual(_resolve_term(request), self.term)
+
+
+class ByStudentTabTemplateTests(TestCase):
+    def test_bulk_action_url_comes_from_the_package_not_a_host_global(self):
+        from django.template.loader import render_to_string
+        from django.urls import reverse
+        html = render_to_string(
+            'student_onboarding/ce/_tab_by_student.html', {'terms': []})
+        self.assertNotIn('student_bulk_actions_url', html)
+        self.assertIn(reverse('cis:student_bulk_actions'), html)

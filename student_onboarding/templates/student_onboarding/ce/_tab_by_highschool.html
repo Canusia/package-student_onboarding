@@ -20,6 +20,9 @@
                 return '/ce/onboarding/api/by_highschool/?term_id=' + $('#onboarding_by_highschool_term').val();
             }
             function init() {
+                if ($.fn.dataTable.isDataTable('#onboarding_by_highschool_table')) {
+                    return;
+                }
                 dt = $('#onboarding_by_highschool_table').DataTable({
                     stateSave: true,
                     ajax: apiUrl(),
@@ -52,7 +55,10 @@
                     ]
                 });
             }
+            // The host shows a deep-linked tab before this callback runs, so
+            // shown.bs.tab may already have fired (#3). init() is idempotent.
             $('a[data-toggle="tab"][href="#onboarding_by_highschool"]').one('shown.bs.tab', init);
+            if ($('#onboarding_by_highschool').hasClass('active')) init();
             $('#onboarding_by_highschool_term').on('change', function () {
                 if (dt) dt.ajax.url(apiUrl()).load();
             });

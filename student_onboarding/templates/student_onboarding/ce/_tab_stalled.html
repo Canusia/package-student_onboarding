@@ -55,7 +55,16 @@
                     ]
                 });
             }
-            $('a[data-toggle="tab"][href="#onboarding_stalled"]').one('shown.bs.tab', load);
+            // The host shows a deep-linked tab before this callback runs, so
+            // shown.bs.tab may already have fired (#3).
+            var started = false;
+            function start() {
+                if (started) return;
+                started = true;
+                load();
+            }
+            $('a[data-toggle="tab"][href="#onboarding_stalled"]').one('shown.bs.tab', start);
+            if ($('#onboarding_stalled').hasClass('active')) start();
             $('#onboarding_stalled_days').on('change', load);
             $('#onboarding_stalled_term').on('change', load);
         });
