@@ -1128,9 +1128,9 @@ class PendingNotificationCampusGateTests(TestCase):
         # ce user scoped only to campus_a - cannot process campus_b.
         self.ce = _make_user(email=f'ce-{uuid.uuid4()}@example.com')
         self.ce.groups.add(Group.objects.get(name='ce'))
-        self.ce.campus = {'process_campus': [str(self.campus_a.id)],
-                          'default_campus': ''}
+        self.ce.campus = {'default_campus': ''}
         self.ce.save()
+        self.ce.set_process_campuses([str(self.campus_a.id)])
         self.client.force_login(self.ce)
 
     def _detail_url(self):
@@ -1429,8 +1429,8 @@ class OnboardingCampusScopeTests(TestCase):
 
         self.ce_a = _make_user(email=f'ce-{uuid.uuid4()}@example.com')
         self.ce_a.groups.add(Group.objects.get(name='ce'))
-        self.ce_a.campus = {'process_campus': [str(self.campus_a.id)]}
         self.ce_a.save()
+        self.ce_a.set_process_campuses([str(self.campus_a.id)])
 
     def _student(self, key):
         student = Student.objects.create(
