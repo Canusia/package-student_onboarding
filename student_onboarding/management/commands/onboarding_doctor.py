@@ -10,6 +10,14 @@ import sys
 
 from django.apps import apps
 from django.core.management.base import BaseCommand
+
+# Per campus on a multi-campus cis (package-cis MC-12): CampusCommand takes
+# --campus and runs handle() inside that campus's context, so active_term()
+# below is that campus's term. Plain BaseCommand on a cis older than v0.1.0a.
+try:
+    from cis.management.campus_command import CampusCommand as _CommandBase
+except ImportError:  # pragma: no cover
+    _CommandBase = BaseCommand
 from django.db.models import Count
 
 from ... import handlers, events
@@ -17,10 +25,11 @@ from ...models import StudentOnboarding, StudentOnboardingStep
 from ...signals import onboarding_event
 
 
-class Command(BaseCommand):
+class Command(_CommandBase):
     help = 'Diagnose the onboarding app\'s wiring and data health.'
 
     def add_arguments(self, parser):
+        super().add_arguments(parser)  # --campus on a multi-campus cis
         parser.add_argument('--json', action='store_true',
                             help='Emit a machine-readable JSON payload.')
         parser.add_argument('--expect-event', nargs='*', default=[],

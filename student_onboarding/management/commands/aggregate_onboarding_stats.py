@@ -11,6 +11,14 @@ Usage:
 import datetime
 
 from django.core.management.base import BaseCommand
+
+# Per campus on a multi-campus cis (package-cis MC-12): CampusCommand takes
+# --campus and runs handle() inside that campus's context, so active_term()
+# below is that campus's term. Plain BaseCommand on a cis older than v0.1.0a.
+try:
+    from cis.management.campus_command import CampusCommand as _CommandBase
+except ImportError:  # pragma: no cover
+    _CommandBase = BaseCommand
 from django.db.models import Count, Q
 from django.utils import timezone
 
@@ -23,10 +31,11 @@ from ...models import (
 )
 
 
-class Command(BaseCommand):
+class Command(_CommandBase):
     help = 'Aggregate daily onboarding completion counts for reporting.'
 
     def add_arguments(self, parser):
+        super().add_arguments(parser)  # --campus on a multi-campus cis
         parser.add_argument('--date', type=str, default=None,
                             help='ISO date to aggregate. Defaults to today.')
         parser.add_argument('--term', type=str, default=None,

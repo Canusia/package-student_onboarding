@@ -15,6 +15,14 @@ from collections import Counter
 
 from django.core.management.base import BaseCommand
 
+# Per campus on a multi-campus cis (package-cis MC-12): CampusCommand takes
+# --campus and runs handle() inside that campus's context, so active_term()
+# below is that campus's term. Plain BaseCommand on a cis older than v0.1.0a.
+try:
+    from cis.management.campus_command import CampusCommand as _CommandBase
+except ImportError:  # pragma: no cover
+    _CommandBase = BaseCommand
+
 from cis.models.student import Student
 from cis.utils import active_term
 
@@ -28,10 +36,11 @@ from ...step_registry import all_steps
 ELIGIBLE_STATUSES = ('pending', 'in_review', 'accepted')
 
 
-class Command(BaseCommand):
+class Command(_CommandBase):
     help = 'Seed StudentOnboarding rows for existing students for the active term.'
 
     def add_arguments(self, parser):
+        super().add_arguments(parser)  # --campus on a multi-campus cis
         parser.add_argument('--dry-run', action='store_true',
                             help='Report what would happen, write nothing.')
         parser.add_argument('--limit', type=int, default=None,

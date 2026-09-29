@@ -11,6 +11,14 @@ import json
 
 from django.core.management.base import BaseCommand
 
+# Per campus on a multi-campus cis (package-cis MC-12): CampusCommand takes
+# --campus and runs handle() inside that campus's context, so active_term()
+# below is that campus's term. Plain BaseCommand on a cis older than v0.1.0a.
+try:
+    from cis.management.campus_command import CampusCommand as _CommandBase
+except ImportError:  # pragma: no cover
+    _CommandBase = BaseCommand
+
 from cis.signals.crontab import cron_task_started, cron_task_done
 from cis.utils import active_term
 
@@ -18,10 +26,11 @@ from ... import services
 from ...step_registry import get as get_step
 
 
-class Command(BaseCommand):
+class Command(_CommandBase):
     help = 'Notify students with pending onboarding steps for the active term.'
 
     def add_arguments(self, parser):
+        super().add_arguments(parser)  # --campus on a multi-campus cis
         parser.add_argument('-t', '--time', type=str, help='Scheduled run time')
         parser.add_argument('--dry-run', action='store_true',
                             help='Build plan but do not send emails.')

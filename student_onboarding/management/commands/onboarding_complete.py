@@ -8,15 +8,24 @@ the operator needs to correct state without touching the ORM.
 """
 from django.core.management.base import BaseCommand, CommandError
 
+# Per campus on a multi-campus cis (package-cis MC-12): CampusCommand takes
+# --campus and runs handle() inside that campus's context, so active_term()
+# below is that campus's term. Plain BaseCommand on a cis older than v0.1.0a.
+try:
+    from cis.management.campus_command import CampusCommand as _CommandBase
+except ImportError:  # pragma: no cover
+    _CommandBase = BaseCommand
+
 from ...api import complete_step, mark_not_applicable
 from ...models import StudentOnboarding, StudentOnboardingStep
 from .._lookup import resolve_student
 
 
-class Command(BaseCommand):
+class Command(_CommandBase):
     help = 'Mark a step completed or not_applicable for a student.'
 
     def add_arguments(self, parser):
+        super().add_arguments(parser)  # --campus on a multi-campus cis
         parser.add_argument('student', help='Student UUID or email.')
         parser.add_argument('step_key',
                             help='Step key (e.g. ferpa, classes, pay_tuition).')
