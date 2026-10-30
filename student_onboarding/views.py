@@ -1,6 +1,7 @@
 """Staff-facing DRF endpoints for the /ce/students/ onboarding summary tabs,
 plus the CE template views for previewing pending onboarding reminders."""
 import datetime
+import uuid
 
 from django.db.models import Count, Q, Max, F, Prefetch
 from django.utils import timezone
@@ -17,6 +18,7 @@ from .models import (
     StudentOnboardingStep,
     DailyOnboardingStats,
 )
+from .api import recalculate
 from .serializers import OnboardingByStudentSerializer
 
 
@@ -164,6 +166,42 @@ class OnboardingStalledView(views.APIView):
             'data': data,
             'recordsTotal': len(data),
             'recordsFiltered': len(data),
+        })
+
+
+class RecalculateView(views.APIView):
+    """Recalculate onboarding for the posted students (`student_ids[]`).
+
+    Students outside the user's campus scope are skipped and counted, never
+    recalculated.
+    """
+    permission_classes = [CIS_user_only]
+
+    def post(self, request):
+        from cis.models.student import Student
+
+        raw = [i for i in request.POST.getlist('student_ids[]') if i]
+        ids = []
+        for value in raw:
+            try:
+                ids.append(str(uuid.UUID(str(value))))
+            except ValueError:
+                continue
+        in_scope = list(
+            _scope_to_user(Student.objects.filter(id__in=ids),
+                           request.user, student_path='pk')
+            .select_related('user').distinct())
+
+        totals = {'seeded': 0, 'completed': 0, 'reopened': 0}
+        for student in in_scope:
+            result = recalculate(student)
+            for key in totals:
+                totals[key] += len(result.get(key, []))
+
+        return Response({
+            'processed': len(in_scope),
+            'skipped': len(set(raw)) - len(in_scope),
+            **totals,
         })
 
 

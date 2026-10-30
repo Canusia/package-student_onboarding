@@ -1716,3 +1716,125 @@ class StepDefinitionPredicateTests(TestCase):
     def test_is_complete_coerces_to_bool(self):
         self.assertIs(self._step(complete_when=lambda s, t: 1).is_complete('S', 'T'), True)
         self.assertIs(self._step(complete_when=lambda s, t: None).is_complete('S', 'T'), False)
+
+
+class RecalculateEndpointTests(TestCase):
+    """POST /ce/onboarding/api/recalculate/ and the student-page action."""
+
+    @classmethod
+    def setUpClass(cls):
+        if _login_history_post_login is not None:
+            user_logged_in.disconnect(_login_history_post_login)
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        if _login_history_post_login is not None:
+            user_logged_in.connect(_login_history_post_login)
+
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        Group.objects.get_or_create(name='ce')
+        CustomUser.objects.get_or_create(
+            username='cron', defaults={'email': 'cron@example.com'})
+        cls.term = _make_term('RC1')
+        cls.url = reverse('student_onboarding_ce:recalculate')
+
+    def setUp(self):
+        with patch('cis.signals.onboarding.active_term', return_value=None):
+            self.student = Student.objects.create(user=_make_user())
+        self.ce = _make_user(email=f'ce-{uuid.uuid4()}@example.com')
+        self.ce.groups.add(Group.objects.get(name='ce'))
+        self.ce.is_superuser = True
+        self.ce.save()
+        self.client.force_login(self.ce)
+
+    def _post(self, ids):
+        return self.client.post(self.url, {'student_ids[]': ids})
+
+    def test_endpoint_recalculates_listed_students(self):
+        result = {'seeded': ['a', 'b'], 'completed': ['c'], 'reopened': []}
+        with patch(f'{PKG}.views.recalculate', return_value=result) as m:
+            response = self._post([str(self.student.id)])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            'processed': 1, 'skipped': 0,
+            'seeded': 2, 'completed': 1, 'reopened': 0,
+        })
+        m.assert_called_once()
+        self.assertEqual(m.call_args[0][0], self.student)
+
+    def test_endpoint_skips_out_of_scope_students(self):
+        # _scope_to_user scopes ce staff by campus: a verified student whose
+        # only registration is at campus Y is out of scope for a user who
+        # processes campus X only.
+        campus_x = Campus.objects.create(
+            name=f'X-{uuid.uuid4().hex[:8]}',
+            code=f'{dj_settings.CAMPUS_CODE_PREFIX}-{uuid.uuid4().hex[:8]}')
+        campus_y = Campus.objects.create(
+            name=f'Y-{uuid.uuid4().hex[:8]}',
+            code=f'{dj_settings.CAMPUS_CODE_PREFIX}-{uuid.uuid4().hex[:8]}')
+        cohort = Cohort.objects.create(
+            name=f'Co-{uuid.uuid4().hex[:8]}', designator='CO')
+        course = Course.objects.create(
+            catalog_number='101', title='Intro', cohort=cohort, campus=campus_y)
+        section = ClassSection.objects.create(
+            class_number='2001', term=self.term, course=course)
+        other = Student.objects.create(
+            user=_make_user(), account_verified=True)
+        StudentRegistration.objects.create(
+            student=other, class_section=section, status='applied',
+            verification_status='pending', grade='A',
+            status_changed_on={'applied_on': '01/01/2024'})
+
+        ce = _make_user(email=f'ce-{uuid.uuid4()}@example.com')
+        ce.groups.add(Group.objects.get(name='ce'))
+        ce.campus = {'default_campus': ''}
+        ce.save()
+        ce.set_process_campuses([str(campus_x.id)])
+        self.client.force_login(ce)
+
+        with patch(f'{PKG}.views.recalculate',
+                   return_value={'seeded': [], 'completed': [],
+                                 'reopened': []}) as m:
+            response = self._post([str(other.id)])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['skipped'], 1)
+        self.assertEqual(response.json()['processed'], 0)
+        m.assert_not_called()
+
+    def test_endpoint_rejects_non_ce(self):
+        user = _make_user(email=f'st-{uuid.uuid4()}@example.com')
+        self.client.force_login(user)
+        self.assertEqual(self._post([str(self.student.id)]).status_code, 403)
+
+    def test_endpoint_rejects_get(self):
+        self.assertEqual(self.client.get(self.url).status_code, 405)
+
+    def test_student_action_registered(self):
+        from myce.component_registry.student import student_actions
+        detail = student_actions.for_scope('detail')
+        slugs = [slug for group in detail.values()
+                 for slug in group['actions'].keys()]
+        self.assertIn('recalculate_onboarding', slugs)
+
+    def test_student_action_reports_counts(self):
+        from .actions import recalculate_onboarding
+        request = RequestFactory().post('/', {'ids[]': [str(self.student.id)]})
+        request.user = self.ce
+        result = {'seeded': ['a'], 'completed': ['b', 'c'], 'reopened': []}
+        with patch(f'{PKG}.actions.recalculate', return_value=result):
+            payload = json.loads(recalculate_onboarding(request).content)
+        self.assertEqual(payload['outcome'], 'alert')
+        self.assertEqual(payload['status'], 'success')
+        self.assertEqual(
+            payload['message'], '2 step(s) completed, 0 reopened, 1 added.')
+
+    def test_stalled_tab_renders_buttons(self):
+        from django.template.loader import render_to_string
+        html = render_to_string(
+            'student_onboarding/ce/_tab_stalled.html', {}, request=None)
+        self.assertIn('onboarding_recalc_all', html)
+        self.assertIn('/ce/onboarding/api/recalculate/', html)

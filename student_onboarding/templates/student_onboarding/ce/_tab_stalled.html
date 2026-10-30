@@ -4,6 +4,9 @@
         <form id="onboarding_stalled_filter" class="form-inline mb-2">
             <label class="mr-2">Days without progress:</label>
             <input type="number" min="1" max="365" value="7" id="onboarding_stalled_days" class="form-control form-control-sm" style="width:80px;" />
+            <button type="button" id="onboarding_recalc_all" class="btn btn-sm btn-outline-primary ml-3">
+                <i class="fas fa-sync"></i> Recalculate all shown
+            </button>
         </form>
         <table id="onboarding_stalled_table" class="table table-striped" style="width:100%">
             <thead>
@@ -16,6 +19,7 @@
                     <th>Last Progress</th>
                     <th>Last Notified</th>
                     <th>Progress</th>
+                    <th></th>
                 </tr>
             </thead>
         </table>
@@ -51,10 +55,48 @@
                             render: function (d) {
                                 return d + '%';
                             }
+                        },
+                        {
+                            data: 'student_id',
+                            orderable: false,
+                            searchable: false,
+                            render: function (d) {
+                                return '<button type="button" class="btn btn-sm btn-outline-primary onboarding-recalc-row" data-student-id="' + $('<div>').text(d).html() + '"><i class="fas fa-sync"></i> Recalculate</button>';
+                            }
                         }
                     ]
                 });
             }
+            function recalc(ids, $btn) {
+                if (!ids.length) return;
+                $btn.prop('disabled', true);
+                $.ajax({
+                    type: 'POST',
+                    url: '/ce/onboarding/api/recalculate/',
+                    data: { 'student_ids[]': ids },
+                    headers: { 'X-CSRFToken': window.CSRF_TOKEN || '{{ csrf_token }}' },
+                    traditional: true
+                }).done(function (r) {
+                    var msg = r.processed + ' processed, ' + r.skipped + ' skipped; ' +
+                        r.completed + ' completed, ' + r.reopened + ' reopened, ' +
+                        r.seeded + ' added.';
+                    if (window.swal) { swal('Onboarding', msg, 'success'); } else { alert(msg); }
+                    load();
+                }).fail(function () {
+                    if (window.swal) { swal('Error', 'Recalculation failed.', 'error'); } else { alert('Recalculation failed.'); }
+                }).always(function () {
+                    $btn.prop('disabled', false);
+                });
+            }
+            $('#onboarding_stalled_table').on('click', '.onboarding-recalc-row', function () {
+                recalc([$(this).data('student-id')], $(this));
+            });
+            $('#onboarding_recalc_all').on('click', function () {
+                if (!dt) return;
+                var ids = dt.rows({ page: 'current', search: 'applied' }).data().toArray()
+                    .map(function (row) { return row.student_id; });
+                recalc(ids, $(this));
+            });
             // The host shows a deep-linked tab before this callback runs, so
             // shown.bs.tab may already have fired (#3).
             var started = false;
