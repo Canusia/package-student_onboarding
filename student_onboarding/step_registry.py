@@ -70,6 +70,12 @@ class StepDefinition:
     # Keeps domain-specific notifications (e.g. parent consent) out of the
     # generic notifier — the callable lives in the tenant catalog.
     notify_action: Optional[Callable] = None
+    # Whether recalculate() may move a completed step back to pending when
+    # `complete_when` turns False (e.g. the only class dropped, the agreement
+    # deleted). Opt-in: a step whose predicate can turn False for reasons the
+    # student cannot undo (a CE-cleared eligibility flag) would otherwise be
+    # stranded pending. Completing pending steps applies to every step.
+    reopenable: bool = False
 
     def should_seed(self, student, term) -> bool:
         """Whether this step belongs on the student's checklist for `term`.

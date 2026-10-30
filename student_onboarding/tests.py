@@ -1584,7 +1584,7 @@ class RecalculateTests(TestCase):
 
     def test_reopens_completed_step_when_predicate_false(self):
         self._register('classes', complete_when=lambda s, t: False,
-                       message='Select the courses.')
+                       message='Select the courses.', reopenable=True)
         api.add_step(self.student, key='classes', label='Classes',
                      message='Select the courses.')
         api.complete_step(self.student, key='classes', message='Done.')
@@ -1601,6 +1601,29 @@ class RecalculateTests(TestCase):
         onboarding.refresh_from_db()
         self.assertEqual(onboarding.completed_steps, 0)
         self.assertIsNone(onboarding.completed_on)
+
+    def test_non_reopenable_completed_step_stays_completed(self):
+        self._register('tuition_assistance', complete_when=lambda s, t: False)
+        api.add_step(self.student, key='tuition_assistance', label='TA')
+        api.complete_step(self.student, key='tuition_assistance')
+
+        result = api.recalculate(self.student)
+
+        self.assertEqual(result['reopened'], [])
+        self.assertEqual(self._row('tuition_assistance').status,
+                         StudentOnboardingStep.STATUS_COMPLETED)
+
+    def test_reopenable_step_no_longer_due_stays_completed(self):
+        self._register('classes', complete_when=lambda s, t: False,
+                       seeded_when=lambda s, t=None: False, reopenable=True)
+        api.add_step(self.student, key='classes', label='Classes')
+        api.complete_step(self.student, key='classes')
+
+        result = api.recalculate(self.student)
+
+        self.assertEqual(result['reopened'], [])
+        self.assertEqual(self._row('classes').status,
+                         StudentOnboardingStep.STATUS_COMPLETED)
 
     def test_leaves_not_applicable_and_predicate_less_steps(self):
         self._register('verify_info', complete_when=lambda s, t: False)
@@ -1683,6 +1706,9 @@ class StepDefinitionPredicateTests(TestCase):
         self._step(seeded_when=lambda s, t=None: seen.append((s, t)) or True).should_seed('S', 'T')
         self._step(seeded_when=lambda *a: seen.append(a) or True).should_seed('S', 'T')
         self.assertEqual(seen, [('S',), ('S', 'T'), ('S', 'T')])
+
+    def test_reopenable_defaults_false(self):
+        self.assertFalse(self._step().reopenable)
 
     def test_is_complete_none_without_predicate(self):
         self.assertIsNone(self._step().is_complete('S', 'T'))
