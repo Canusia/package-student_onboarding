@@ -1926,6 +1926,46 @@ class RecalculateEndpointTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(m.call_args.kwargs.get('term'), other)
 
+    def _campus_term_setup(self):
+        def campus(tag):
+            return Campus.objects.create(
+                name=f'{tag}-{uuid.uuid4().hex[:8]}',
+                code=f'{dj_settings.CAMPUS_CODE_PREFIX}-{uuid.uuid4().hex[:8]}')
+        campus_x, campus_y = campus('X'), campus('Y')
+
+        def term_on(c, code):
+            ay = AcademicYear.objects.create(name=f'AY-{uuid.uuid4()}', campus=c)
+            return Term.objects.create(academic_year=ay, code=code, label=f'L-{code}')
+        ce = _make_user(email=f'ce-{uuid.uuid4()}@example.com')
+        ce.groups.add(Group.objects.get(name='ce'))
+        ce.campus = {'default_campus': ''}
+        ce.save()
+        ce.set_process_campuses([str(campus_x.id)])
+        # unverified, so in scope for any ce user
+        student = Student.objects.create(user=_make_user(), account_verified=False)
+        return ce, student, term_on(campus_x, 'RCX'), term_on(campus_y, 'RCY')
+
+    def test_endpoint_refuses_a_term_on_another_campus(self):
+        # package-cis#145: the posted term_id is campus-scoped like the students.
+        ce, student, _, other_campus_term = self._campus_term_setup()
+        self.client.force_login(ce)
+        with patch(f'{PKG}.views.recalculate') as m:
+            response = self.client.post(self.url, {
+                'student_ids[]': [str(student.id)],
+                'term_id': str(other_campus_term.id)})
+        self.assertEqual(response.status_code, 403)
+        m.assert_not_called()
+
+    def test_endpoint_accepts_a_term_on_the_users_campus(self):
+        ce, student, own_term, _ = self._campus_term_setup()
+        self.client.force_login(ce)
+        empty = {'seeded': [], 'completed': [], 'reopened': []}
+        with patch(f'{PKG}.views.recalculate', return_value=empty) as m:
+            response = self.client.post(self.url, {
+                'student_ids[]': [str(student.id)], 'term_id': str(own_term.id)})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(m.call_args.kwargs.get('term'), own_term)
+
     def test_endpoint_without_or_with_bad_term_uses_active_term(self):
         empty = {'seeded': [], 'completed': [], 'reopened': []}
         for extra in ({}, {'term_id': 'null'}, {'term_id': str(uuid.uuid4())}):

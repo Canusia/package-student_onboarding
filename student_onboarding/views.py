@@ -214,6 +214,17 @@ class RecalculateView(views.APIView):
         except TermNotConfigured:
             term = None  # each student then fails and is counted, as before
 
+        # The posted term is campus-scoped like the students: a term on a
+        # campus the user doesn't process is refused (package-cis#145).
+        posted = request.POST.get('term_id', '').strip()
+        if term is not None and posted and str(term.pk) == posted:
+            from cis.campus_gate import can_process_campus
+            campus = getattr(term.academic_year, 'campus', None)
+            if not can_process_campus(request.user, campus):
+                return Response(
+                    {'error': 'That term is not on a campus you process.'},
+                    status=403)
+
         totals = {'seeded': 0, 'completed': 0, 'reopened': 0}
         processed = failed = 0
         for student in in_scope:
