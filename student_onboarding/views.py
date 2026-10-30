@@ -11,6 +11,7 @@ from django.views.decorators.clickjacking import xframe_options_exempt
 from rest_framework import viewsets, views
 from rest_framework.response import Response
 
+from cis.campus_context import is_multi_campus
 from cis.utils import CIS_user_only, active_term
 from cis.models.highschool import HighSchool
 
@@ -27,20 +28,26 @@ logger = logging.getLogger(__name__)
 MAX_RECALCULATE_IDS = 500
 
 
-def _resolve_term(request, params=None):
-    """The term named by `term_id` in `params` (default: the query string),
-    else the active term."""
-    params = request.GET if params is None else params
+def _term_from_params(params):
+    """The term named by `term_id` in `params`, or None when it is missing or
+    names no term."""
     term_id = params.get('term_id', '').strip()
     if term_id:
         from django.core.exceptions import ValidationError
         from cis.models.term import Term
         try:
-            return Term.objects.get(id=term_id)
+            return Term.objects.select_related('academic_year').get(id=term_id)
         except (Term.DoesNotExist, ValidationError, ValueError):
             # An empty term <select> sends the string 'null' (#3).
             pass
-    return active_term()
+    return None
+
+
+def _resolve_term(request, params=None):
+    """The term named by `term_id` in `params` (default: the query string),
+    else the active term."""
+    params = request.GET if params is None else params
+    return _term_from_params(params) or active_term()
 
 
 def _scope_to_user(records, user, student_path='student'):
@@ -209,21 +216,25 @@ class RecalculateView(views.APIView):
         # The term picked on the calling tab (stalled tab); missing or bad
         # -> the active term, as before.
         from cis.utils import TermNotConfigured
-        try:
-            term = _resolve_term(request, params=request.POST)
-        except TermNotConfigured:
-            term = None  # each student then fails and is counted, as before
 
-        # The posted term is campus-scoped like the students: a term on a
-        # campus the user doesn't process is refused (package-cis#145).
-        posted = request.POST.get('term_id', '').strip()
-        if term is not None and posted and str(term.pk) == posted:
+        # Multi-campus: a term resolved from the request (in whatever form
+        # its id was posted) must be on a campus the user processes; a
+        # campus-less term is refused. Single-campus deployments are
+        # unaffected, as for terms elsewhere (package-cis#145).
+        posted_term = _term_from_params(request.POST)
+        if posted_term is not None and is_multi_campus():
             from cis.campus_gate import can_process_campus
-            campus = getattr(term.academic_year, 'campus', None)
-            if not can_process_campus(request.user, campus):
+            campus = posted_term.academic_year.campus
+            if (campus is None and not request.user.is_superuser) \
+                    or not can_process_campus(request.user, campus):
                 return Response(
                     {'error': 'That term is not on a campus you process.'},
                     status=403)
+
+        try:
+            term = posted_term or active_term()
+        except TermNotConfigured:
+            term = None  # each student then fails and is counted, as before
 
         totals = {'seeded': 0, 'completed': 0, 'reopened': 0}
         processed = failed = 0

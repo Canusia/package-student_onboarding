@@ -1945,26 +1945,47 @@ class RecalculateEndpointTests(TestCase):
         student = Student.objects.create(user=_make_user(), account_verified=False)
         return ce, student, term_on(campus_x, 'RCX'), term_on(campus_y, 'RCY')
 
-    def test_endpoint_refuses_a_term_on_another_campus(self):
-        # package-cis#145: the posted term_id is campus-scoped like the students.
-        ce, student, _, other_campus_term = self._campus_term_setup()
-        self.client.force_login(ce)
-        with patch(f'{PKG}.views.recalculate') as m:
-            response = self.client.post(self.url, {
-                'student_ids[]': [str(student.id)],
-                'term_id': str(other_campus_term.id)})
-        self.assertEqual(response.status_code, 403)
-        m.assert_not_called()
-
-    def test_endpoint_accepts_a_term_on_the_users_campus(self):
-        ce, student, own_term, _ = self._campus_term_setup()
+    def _post_term(self, ce, student, term_id):
         self.client.force_login(ce)
         empty = {'seeded': [], 'completed': [], 'reopened': []}
         with patch(f'{PKG}.views.recalculate', return_value=empty) as m:
             response = self.client.post(self.url, {
-                'student_ids[]': [str(student.id)], 'term_id': str(own_term.id)})
+                'student_ids[]': [str(student.id)], 'term_id': term_id})
+        return response, m
+
+    @patch(f'{PKG}.views.is_multi_campus', return_value=True)
+    def test_endpoint_refuses_a_term_on_another_campus(self, _multi):
+        # package-cis#145: the posted term_id is campus-scoped like the
+        # students, however its id is formatted.
+        ce, student, _, foreign = self._campus_term_setup()
+        for term_id in (str(foreign.id), str(foreign.id).upper(),
+                        '{%s}' % foreign.id, foreign.id.hex):
+            with self.subTest(term_id=term_id):
+                response, m = self._post_term(ce, student, term_id)
+                self.assertEqual(response.status_code, 403)
+                m.assert_not_called()
+
+    @patch(f'{PKG}.views.is_multi_campus', return_value=True)
+    def test_endpoint_refuses_a_campus_less_term_in_multi_campus(self, _multi):
+        ce, student, _, _ = self._campus_term_setup()
+        response, m = self._post_term(ce, student, str(_make_term('RCN').id))
+        self.assertEqual(response.status_code, 403)
+        m.assert_not_called()
+
+    @patch(f'{PKG}.views.is_multi_campus', return_value=True)
+    def test_endpoint_accepts_a_term_on_the_users_campus(self, _multi):
+        ce, student, own_term, _ = self._campus_term_setup()
+        response, m = self._post_term(ce, student, str(own_term.id).upper())
         self.assertEqual(response.status_code, 200)
         self.assertEqual(m.call_args.kwargs.get('term'), own_term)
+
+    @patch(f'{PKG}.views.is_multi_campus', return_value=False)
+    def test_single_campus_ce_without_process_campuses_is_unaffected(self, _multi):
+        ce, student, _, campus_term = self._campus_term_setup()
+        ce.set_process_campuses([])
+        response, m = self._post_term(ce, student, str(campus_term.id))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(m.call_args.kwargs.get('term'), campus_term)
 
     def test_endpoint_without_or_with_bad_term_uses_active_term(self):
         empty = {'seeded': [], 'completed': [], 'reopened': []}
