@@ -1760,11 +1760,83 @@ class RecalculateEndpointTests(TestCase):
             response = self._post([str(self.student.id)])
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {
-            'processed': 1, 'skipped': 0,
+            'processed': 1, 'skipped': 0, 'failed': 0,
             'seeded': 2, 'completed': 1, 'reopened': 0,
         })
         m.assert_called_once()
         self.assertEqual(m.call_args[0][0], self.student)
+
+    def _out_of_scope_setup(self):
+        campus_x = Campus.objects.create(
+            name=f'X-{uuid.uuid4().hex[:8]}',
+            code=f'{dj_settings.CAMPUS_CODE_PREFIX}-{uuid.uuid4().hex[:8]}')
+        campus_y = Campus.objects.create(
+            name=f'Y-{uuid.uuid4().hex[:8]}',
+            code=f'{dj_settings.CAMPUS_CODE_PREFIX}-{uuid.uuid4().hex[:8]}')
+        cohort = Cohort.objects.create(
+            name=f'Co-{uuid.uuid4().hex[:8]}', designator='CO')
+        course = Course.objects.create(
+            catalog_number='101', title='Intro', cohort=cohort, campus=campus_y)
+        section = ClassSection.objects.create(
+            class_number='2001', term=self.term, course=course)
+        other = Student.objects.create(
+            user=_make_user(), account_verified=True)
+        StudentRegistration.objects.create(
+            student=other, class_section=section, status='applied',
+            verification_status='pending', grade='A',
+            status_changed_on={'applied_on': '01/01/2024'})
+        ce = _make_user(email=f'ce-{uuid.uuid4()}@example.com')
+        ce.groups.add(Group.objects.get(name='ce'))
+        ce.campus = {'default_campus': ''}
+        ce.save()
+        ce.set_process_campuses([str(campus_x.id)])
+        return ce, other
+
+    def test_student_action_rejects_out_of_scope_student(self):
+        from .actions import recalculate_onboarding
+        ce, other = self._out_of_scope_setup()
+        request = RequestFactory().post('/', {'ids[]': [str(other.id)]})
+        request.user = ce
+        with patch(f'{PKG}.actions.recalculate') as m:
+            payload = json.loads(recalculate_onboarding(request).content)
+        self.assertEqual(payload['status'], 'error')
+        m.assert_not_called()
+
+    def test_student_action_reports_no_active_term(self):
+        from .actions import recalculate_onboarding
+        request = RequestFactory().post('/', {'ids[]': [str(self.student.id)]})
+        request.user = self.ce
+        with patch(f'{PKG}.api.active_term', return_value=None):
+            payload = json.loads(recalculate_onboarding(request).content)
+        self.assertEqual(payload['status'], 'warning')
+        self.assertIn('No active term', payload['message'])
+        self.assertNotIn('step(s)', payload['message'])
+
+    def test_endpoint_isolates_a_failing_student(self):
+        with patch('cis.signals.onboarding.active_term', return_value=None):
+            second = Student.objects.create(user=_make_user())
+        ok = {'seeded': [], 'completed': ['c'], 'reopened': []}
+
+        def fake(student, **kw):
+            if student.pk == self.student.pk:
+                raise RuntimeError('boom')
+            return ok
+        with patch(f'{PKG}.views.recalculate', side_effect=fake):
+            with self.assertLogs(f'{PKG}.views', level='ERROR'):
+                response = self._post([str(self.student.id), str(second.id)])
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['processed'], 1)
+        self.assertEqual(body['failed'], 1)
+        self.assertEqual(body['completed'], 1)
+
+    def test_endpoint_caps_the_number_of_ids(self):
+        ids = [str(uuid.uuid4()) for _ in range(501)]
+        with patch(f'{PKG}.views.recalculate') as m:
+            response = self._post(ids)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('error', response.json())
+        m.assert_not_called()
 
     def test_endpoint_skips_out_of_scope_students(self):
         # _scope_to_user scopes ce staff by campus: a verified student whose
@@ -1825,7 +1897,8 @@ class RecalculateEndpointTests(TestCase):
         request = RequestFactory().post('/', {'ids[]': [str(self.student.id)]})
         request.user = self.ce
         result = {'seeded': ['a'], 'completed': ['b', 'c'], 'reopened': []}
-        with patch(f'{PKG}.actions.recalculate', return_value=result):
+        with patch(f'{PKG}.actions.recalculate', return_value=result), \
+                patch(f'{PKG}.api.active_term', return_value=self.term):
             payload = json.loads(recalculate_onboarding(request).content)
         self.assertEqual(payload['outcome'], 'alert')
         self.assertEqual(payload['status'], 'success')

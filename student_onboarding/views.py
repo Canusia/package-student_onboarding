@@ -1,6 +1,7 @@
 """Staff-facing DRF endpoints for the /ce/students/ onboarding summary tabs,
 plus the CE template views for previewing pending onboarding reminders."""
 import datetime
+import logging
 import uuid
 
 from django.db.models import Count, Q, Max, F, Prefetch
@@ -20,6 +21,10 @@ from .models import (
 )
 from .api import recalculate
 from .serializers import OnboardingByStudentSerializer
+
+logger = logging.getLogger(__name__)
+
+MAX_RECALCULATE_IDS = 500
 
 
 def _resolve_term(request):
@@ -173,7 +178,8 @@ class RecalculateView(views.APIView):
     """Recalculate onboarding for the posted students (`student_ids[]`).
 
     Students outside the user's campus scope are skipped and counted, never
-    recalculated.
+    recalculated. A student whose recalculation raises is logged and counted
+    in `failed`; the rest still run. At most 500 distinct ids per request.
     """
     permission_classes = [CIS_user_only]
 
@@ -181,6 +187,11 @@ class RecalculateView(views.APIView):
         from cis.models.student import Student
 
         raw = [i for i in request.POST.getlist('student_ids[]') if i]
+        if len(set(raw)) > MAX_RECALCULATE_IDS:
+            return Response(
+                {'error': f'Too many students: at most {MAX_RECALCULATE_IDS} '
+                          'can be recalculated at once.'},
+                status=400)
         ids = []
         for value in raw:
             try:
@@ -193,14 +204,24 @@ class RecalculateView(views.APIView):
             .select_related('user').distinct())
 
         totals = {'seeded': 0, 'completed': 0, 'reopened': 0}
+        processed = failed = 0
         for student in in_scope:
-            result = recalculate(student)
+            try:
+                result = recalculate(student)
+            except Exception:
+                logger.exception(
+                    'Onboarding recalculate failed for student %s', student.pk)
+                failed += 1
+                continue
+            processed += 1
             for key in totals:
                 totals[key] += len(result.get(key, []))
 
         return Response({
-            'processed': len(in_scope),
+            'processed': processed,
+            # out of scope, unknown or malformed ids
             'skipped': len(set(raw)) - len(in_scope),
+            'failed': failed,
             **totals,
         })
 

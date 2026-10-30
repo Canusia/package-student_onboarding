@@ -67,9 +67,14 @@
                     ]
                 });
             }
-            function recalc(ids, $btn) {
-                if (!ids.length) return;
-                $btn.prop('disabled', true);
+            var busy = false;
+            function setBusy(on) {
+                busy = on;
+                $('#onboarding_recalc_all, .onboarding-recalc-row').prop('disabled', on);
+            }
+            function recalc(ids) {
+                if (!ids.length || busy) return;
+                setBusy(true);
                 $.ajax({
                     type: 'POST',
                     url: '/ce/onboarding/api/recalculate/',
@@ -79,23 +84,23 @@
                 }).done(function (r) {
                     var msg = r.processed + ' processed, ' + r.skipped + ' skipped; ' +
                         r.completed + ' completed, ' + r.reopened + ' reopened, ' +
-                        r.seeded + ' added.';
+                        r.seeded + ' added' + (r.failed ? ', ' + r.failed + ' failed.' : '.');
                     if (window.swal) { swal('Onboarding', msg, 'success'); } else { alert(msg); }
                     load();
                 }).fail(function () {
                     if (window.swal) { swal('Error', 'Recalculation failed.', 'error'); } else { alert('Recalculation failed.'); }
                 }).always(function () {
-                    $btn.prop('disabled', false);
+                    setBusy(false);
                 });
             }
             $('#onboarding_stalled_table').on('click', '.onboarding-recalc-row', function () {
-                recalc([$(this).data('student-id')], $(this));
+                recalc([$(this).data('student-id')]);
             });
             $('#onboarding_recalc_all').on('click', function () {
                 if (!dt) return;
                 var ids = dt.rows({ page: 'current', search: 'applied' }).data().toArray()
                     .map(function (row) { return row.student_id; });
-                recalc(ids, $(this));
+                recalc(ids);
             });
             // The host shows a deep-linked tab before this callback runs, so
             // shown.bs.tab may already have fired (#3).

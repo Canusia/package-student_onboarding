@@ -21,6 +21,7 @@ from django.urls import reverse
 
 from myce.component_registry.student import student_actions
 
+from . import api
 from .api import recalculate
 
 
@@ -77,6 +78,13 @@ def recalculate_onboarding(request):
             'status': 'error',
             'title': 'Error',
             'message': 'No record selected.',
+        })
+    if api.active_term() is None:
+        return JsonResponse({
+            'outcome': 'alert',
+            'status': 'warning',
+            'title': 'Onboarding',
+            'message': 'No active term, so there is nothing to recalculate.',
         })
     result = recalculate(student)
     return JsonResponse({
