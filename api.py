@@ -4,4 +4,6 @@ from .student_onboarding.api import (  # noqa: F401
     add_step,
     complete_step,
     mark_not_applicable,
+    recalculate,
+    reopen_step,
 )

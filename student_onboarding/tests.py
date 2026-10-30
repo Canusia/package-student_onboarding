@@ -1533,3 +1533,160 @@ class InstallIsSeedOnlyTests(TestCase):
                 self._install(cls)
 
                 self.assertEqual(Setting.objects.get(key=cls.key).value, custom)
+
+
+class RecalculateTests(TestCase):
+    """api.recalculate() re-evaluates every registered step against its
+    predicates, so CE-side changes (adding/dropping classes, marking the
+    agreement received, deleting it) move the checklist both ways."""
+
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        cls.term = _make_term('RC1')
+
+    def setUp(self):
+        from .step_registry import StepDefinition, _registry
+        with patch('cis.signals.onboarding.active_term', return_value=None):
+            self.student = Student.objects.create(user=_make_user())
+        p = patch(f'{PKG}.api.active_term', return_value=self.term)
+        p.start()
+        self.addCleanup(p.stop)
+        # An isolated registry: only the steps each test registers.
+        registry_patch = patch.dict(_registry, clear=True)
+        registry_patch.start()
+        self.addCleanup(registry_patch.stop)
+        self.StepDefinition = StepDefinition
+        self.state = {}
+
+    def _register(self, key, **kwargs):
+        from .step_registry import register
+        register(self.StepDefinition(key=key, label=key.title(), **kwargs))
+
+    def _row(self, key):
+        return StudentOnboardingStep.objects.get(
+            onboarding__student=self.student, onboarding__term=self.term, key=key)
+
+    def test_completes_pending_step_when_predicate_true(self):
+        self._register('classes', complete_when=lambda s, t: True,
+                       complete_message='Class selection submitted.')
+        api.add_step(self.student, key='classes', label='Classes')
+
+        result = api.recalculate(self.student)
+
+        self.assertEqual(result['completed'], ['classes'])
+        row = self._row('classes')
+        self.assertEqual(row.status, StudentOnboardingStep.STATUS_COMPLETED)
+        self.assertEqual(row.message, 'Class selection submitted.')
+        onboarding = StudentOnboarding.objects.get(student=self.student, term=self.term)
+        self.assertEqual(onboarding.completed_steps, 1)
+        self.assertIsNotNone(onboarding.completed_on)
+
+    def test_reopens_completed_step_when_predicate_false(self):
+        self._register('classes', complete_when=lambda s, t: False,
+                       message='Select the courses.')
+        api.add_step(self.student, key='classes', label='Classes',
+                     message='Select the courses.')
+        api.complete_step(self.student, key='classes', message='Done.')
+        onboarding = StudentOnboarding.objects.get(student=self.student, term=self.term)
+        self.assertIsNotNone(onboarding.completed_on)
+
+        result = api.recalculate(self.student)
+
+        self.assertEqual(result['reopened'], ['classes'])
+        row = self._row('classes')
+        self.assertEqual(row.status, StudentOnboardingStep.STATUS_PENDING)
+        self.assertIsNone(row.completed_on)
+        self.assertEqual(row.message, 'Select the courses.')
+        onboarding.refresh_from_db()
+        self.assertEqual(onboarding.completed_steps, 0)
+        self.assertIsNone(onboarding.completed_on)
+
+    def test_leaves_not_applicable_and_predicate_less_steps(self):
+        self._register('verify_info', complete_when=lambda s, t: False)
+        self._register('manual')  # no predicate
+        self._register('also_manual')  # no predicate, pending
+        api.add_step(self.student, key='verify_info', label='V')
+        api.add_step(self.student, key='manual', label='M')
+        api.add_step(self.student, key='also_manual', label='A')
+        api.mark_not_applicable(self.student, key='verify_info')
+        api.complete_step(self.student, key='manual')
+
+        result = api.recalculate(self.student)
+
+        self.assertEqual(result, {'seeded': [], 'completed': [], 'reopened': []})
+        self.assertEqual(self._row('verify_info').status,
+                         StudentOnboardingStep.STATUS_NOT_APPLICABLE)
+        self.assertEqual(self._row('manual').status,
+                         StudentOnboardingStep.STATUS_COMPLETED)
+        self.assertEqual(self._row('also_manual').status,
+                         StudentOnboardingStep.STATUS_PENDING)
+
+    def test_seeds_missing_step_now_due(self):
+        self.state['due'] = False
+        self._register('classes', seeded_when=lambda s, t=None: self.state['due'])
+        # A one-argument seeded_when keeps working.
+        self._register('legacy', seeded_when=lambda s: True)
+        self._register('never', seeded_when=lambda s, t=None: False)
+
+        first = api.recalculate(self.student)
+        self.assertEqual(first['seeded'], ['legacy'])
+
+        self.state['due'] = True
+        second = api.recalculate(self.student)
+
+        self.assertEqual(second['seeded'], ['classes'])
+        onboarding = StudentOnboarding.objects.get(student=self.student, term=self.term)
+        self.assertEqual(
+            set(onboarding.steps.values_list('key', flat=True)), {'classes', 'legacy'})
+        self.assertEqual(onboarding.total_steps, 2)
+
+    def test_raising_complete_predicate_is_skipped(self):
+        def boom(student, term):
+            raise RuntimeError('predicate failed')
+        self._register('classes', complete_when=boom)
+        api.add_step(self.student, key='classes', label='Classes')
+
+        with self.assertLogs(f'{PKG}.step_registry', level='ERROR'):
+            result = api.recalculate(self.student)
+
+        self.assertEqual(result['completed'], [])
+        self.assertEqual(self._row('classes').status,
+                         StudentOnboardingStep.STATUS_PENDING)
+
+    def test_no_active_term_returns_empty(self):
+        self._register('classes', complete_when=lambda s, t: True)
+        with patch(f'{PKG}.api.active_term', return_value=None):
+            result = api.recalculate(self.student)
+        self.assertEqual(result, {'seeded': [], 'completed': [], 'reopened': []})
+        self.assertFalse(StudentOnboarding.objects.filter(student=self.student).exists())
+
+    def test_reopen_step_leaves_not_applicable_alone(self):
+        api.add_step(self.student, key='verify_info', label='V')
+        api.mark_not_applicable(self.student, key='verify_info')
+        step = api.reopen_step(self.student, key='verify_info')
+        self.assertEqual(step.status, StudentOnboardingStep.STATUS_NOT_APPLICABLE)
+        self.assertIsNone(api.reopen_step(self.student, key='missing'))
+
+
+class StepDefinitionPredicateTests(TestCase):
+    def _step(self, **kwargs):
+        from .step_registry import StepDefinition
+        return StepDefinition(key='probe', label='Probe', **kwargs)
+
+    def test_should_seed_without_predicate(self):
+        self.assertTrue(self._step().should_seed('S', 'T'))
+
+    def test_should_seed_passes_term_only_to_two_arg_predicates(self):
+        seen = []
+        self._step(seeded_when=lambda s: seen.append((s,)) or True).should_seed('S', 'T')
+        self._step(seeded_when=lambda s, t=None: seen.append((s, t)) or True).should_seed('S', 'T')
+        self._step(seeded_when=lambda *a: seen.append(a) or True).should_seed('S', 'T')
+        self.assertEqual(seen, [('S',), ('S', 'T'), ('S', 'T')])
+
+    def test_is_complete_none_without_predicate(self):
+        self.assertIsNone(self._step().is_complete('S', 'T'))
+
+    def test_is_complete_coerces_to_bool(self):
+        self.assertIs(self._step(complete_when=lambda s, t: 1).is_complete('S', 'T'), True)
+        self.assertIs(self._step(complete_when=lambda s, t: None).is_complete('S', 'T'), False)

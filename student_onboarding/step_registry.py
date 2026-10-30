@@ -7,8 +7,42 @@ FERPA or tuition assistance. Everything that needs a list of step keys
 (default-step seeding, the notify settings form, the backfill command)
 reads from this registry.
 """
+import inspect
+import logging
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=None)
+def _predicate_accepts_term(predicate):
+    """Whether a predicate takes the optional second `term` argument.
+
+    Tenant catalogs declare `seeded_when` as either `(student)` or
+    `(student, term=None)`; passing `term` positionally to a one-argument
+    predicate raises TypeError (package-cis#7). Cached per function object:
+    the registry is small and fixed, so this resolves once per predicate.
+    """
+    try:
+        parameters = inspect.signature(predicate).parameters.values()
+    except (TypeError, ValueError):
+        # No introspectable signature: one argument is the safer convention.
+        return False
+    if any(p.kind == p.VAR_POSITIONAL for p in parameters):
+        return True
+    positional = [
+        p for p in parameters
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    return len(positional) >= 2
+
+
+def _call_predicate(predicate, student, term):
+    if _predicate_accepts_term(predicate):
+        return predicate(student, term)
+    return predicate(student)
 
 
 @dataclass
@@ -36,6 +70,34 @@ class StepDefinition:
     # Keeps domain-specific notifications (e.g. parent consent) out of the
     # generic notifier — the callable lives in the tenant catalog.
     notify_action: Optional[Callable] = None
+
+    def should_seed(self, student, term) -> bool:
+        """Whether this step belongs on the student's checklist for `term`.
+
+        True when `seeded_when` is unset. One-argument predicates are called
+        without `term`. A raising predicate propagates; callers decide how to
+        degrade.
+        """
+        if not self.seeded_when:
+            return True
+        return bool(_call_predicate(self.seeded_when, student, term))
+
+    def is_complete(self, student, term) -> Optional[bool]:
+        """Whether `complete_when` says the step is done for `term`.
+
+        None when the step has no `complete_when` (only events complete it) or
+        when the predicate raises (logged), so callers leave the step alone.
+        """
+        if not self.complete_when:
+            return None
+        try:
+            return bool(_call_predicate(self.complete_when, student, term))
+        except Exception:
+            logger.exception(
+                'complete_when for onboarding step %r raised for student %s',
+                self.key, getattr(student, 'pk', student),
+            )
+            return None
 
 
 _registry: Dict[str, StepDefinition] = {}
