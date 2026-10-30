@@ -11,7 +11,6 @@ from django.views.decorators.clickjacking import xframe_options_exempt
 from rest_framework import viewsets, views
 from rest_framework.response import Response
 
-from cis.campus_context import is_multi_campus
 from cis.utils import CIS_user_only, active_term
 from cis.models.highschool import HighSchool
 
@@ -26,6 +25,13 @@ from .serializers import OnboardingByStudentSerializer
 logger = logging.getLogger(__name__)
 
 MAX_RECALCULATE_IDS = 500
+
+
+def is_multi_campus():
+    """cis's is_multi_campus, imported when called: a tenant may pin a cis
+    without campus_context, and only RecalculateView.post needs it."""
+    from cis.campus_context import is_multi_campus as _is_multi_campus
+    return _is_multi_campus()
 
 
 def _term_from_params(params):
