@@ -79,7 +79,12 @@ def recalculate_onboarding(request):
             'title': 'Error',
             'message': 'No record selected.',
         })
-    if api.active_term() is None:
+    from cis.utils import TermNotConfigured
+    try:
+        term = api.active_term()
+    except TermNotConfigured:  # multi-campus: none set for this campus
+        term = None
+    if term is None:
         return JsonResponse({
             'outcome': 'alert',
             'status': 'warning',

@@ -27,8 +27,11 @@ logger = logging.getLogger(__name__)
 MAX_RECALCULATE_IDS = 500
 
 
-def _resolve_term(request):
-    term_id = request.GET.get('term_id', '').strip()
+def _resolve_term(request, params=None):
+    """The term named by `term_id` in `params` (default: the query string),
+    else the active term."""
+    params = request.GET if params is None else params
+    term_id = params.get('term_id', '').strip()
     if term_id:
         from django.core.exceptions import ValidationError
         from cis.models.term import Term
@@ -203,11 +206,19 @@ class RecalculateView(views.APIView):
                            request.user, student_path='pk')
             .select_related('user').distinct())
 
+        # The term picked on the calling tab (stalled tab); missing or bad
+        # -> the active term, as before.
+        from cis.utils import TermNotConfigured
+        try:
+            term = _resolve_term(request, params=request.POST)
+        except TermNotConfigured:
+            term = None  # each student then fails and is counted, as before
+
         totals = {'seeded': 0, 'completed': 0, 'reopened': 0}
         processed = failed = 0
         for student in in_scope:
             try:
-                result = recalculate(student)
+                result = recalculate(student, term=term)
             except Exception:
                 logger.exception(
                     'Onboarding recalculate failed for student %s', student.pk)

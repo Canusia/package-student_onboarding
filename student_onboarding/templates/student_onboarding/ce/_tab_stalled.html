@@ -61,7 +61,8 @@
                             orderable: false,
                             searchable: false,
                             render: function (d) {
-                                return '<button type="button" class="btn btn-sm btn-outline-primary onboarding-recalc-row" data-student-id="' + $('<div>').text(d).html() + '"><i class="fas fa-sync"></i> Recalculate</button>';
+                                return $('<button type="button" class="btn btn-sm btn-outline-primary onboarding-recalc-row"><i class="fas fa-sync"></i> Recalculate</button>')
+                                    .attr('data-student-id', d).prop('outerHTML');
                             }
                         }
                     ]
@@ -78,7 +79,7 @@
                 $.ajax({
                     type: 'POST',
                     url: '/ce/onboarding/api/recalculate/',
-                    data: { 'student_ids[]': ids },
+                    data: { 'student_ids[]': ids, 'term_id': $('#onboarding_stalled_term').val() },
                     headers: { 'X-CSRFToken': window.CSRF_TOKEN || '{{ csrf_token }}' },
                     traditional: true
                 }).done(function (r) {

@@ -1382,6 +1382,26 @@ class ByStudentTabTemplateTests(TestCase):
         self.assertIn(reverse('cis:student_bulk_actions'), html)
 
 
+class StalledTabTemplateTests(TestCase):
+    def _html(self):
+        from django.template.loader import render_to_string
+        return render_to_string(
+            'student_onboarding/ce/_tab_stalled.html', {'terms': []})
+
+    def test_recalculate_posts_the_selected_term(self):
+        html = self._html()
+        self.assertIn('id="onboarding_stalled_term"', html)
+        self.assertRegex(
+            html, r"'term_id':\s*\$\('#onboarding_stalled_term'\)\.val\(\)")
+
+    def test_row_button_sets_the_student_id_as_an_attribute(self):
+        # .text().html() escapes <>& but not quotes, so it is unsafe in an
+        # attribute value; jQuery .attr() is.
+        html = self._html()
+        self.assertNotIn("$('<div>').text(d).html()", html)
+        self.assertIn(".attr('data-student-id', d)", html)
+
+
 class OnboardingCampusScopeTests(TestCase):
     """#6: a campus-restricted CE user sees only students at their campuses."""
 
@@ -1896,6 +1916,39 @@ class RecalculateEndpointTests(TestCase):
 
     def test_endpoint_rejects_get(self):
         self.assertEqual(self.client.get(self.url).status_code, 405)
+
+    def test_endpoint_recalculates_the_posted_term(self):
+        other = _make_term('RC2')
+        empty = {'seeded': [], 'completed': [], 'reopened': []}
+        with patch(f'{PKG}.views.recalculate', return_value=empty) as m:
+            response = self.client.post(self.url, {
+                'student_ids[]': [str(self.student.id)], 'term_id': str(other.id)})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(m.call_args.kwargs.get('term'), other)
+
+    def test_endpoint_without_or_with_bad_term_uses_active_term(self):
+        empty = {'seeded': [], 'completed': [], 'reopened': []}
+        for extra in ({}, {'term_id': 'null'}, {'term_id': str(uuid.uuid4())}):
+            with self.subTest(extra=extra), \
+                    patch(f'{PKG}.views.active_term', return_value=self.term), \
+                    patch(f'{PKG}.views.recalculate', return_value=empty) as m:
+                response = self.client.post(
+                    self.url, {'student_ids[]': [str(self.student.id)], **extra})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(m.call_args.kwargs.get('term'), self.term)
+
+    def test_student_action_reports_unconfigured_term(self):
+        from cis.utils import TermNotConfigured
+        from .actions import recalculate_onboarding
+        request = RequestFactory().post('/', {'ids[]': [str(self.student.id)]})
+        request.user = self.ce
+        with patch(f'{PKG}.api.active_term',
+                   side_effect=TermNotConfigured('none')), \
+                patch(f'{PKG}.actions.recalculate') as m:
+            payload = json.loads(recalculate_onboarding(request).content)
+        self.assertEqual(payload['status'], 'warning')
+        self.assertIn('No active term', payload['message'])
+        m.assert_not_called()
 
     def test_student_action_registered(self):
         from myce.component_registry.student import student_actions
