@@ -1684,6 +1684,18 @@ class RecalculateTests(TestCase):
         self.assertEqual(result, {'seeded': [], 'completed': [], 'reopened': []})
         self.assertFalse(StudentOnboarding.objects.filter(student=self.student).exists())
 
+    def test_create_false_leaves_a_student_without_a_record_alone(self):
+        self._register('classes', complete_when=lambda s, t: True)
+        result = api.recalculate(self.student, create=False)
+        self.assertEqual(result, {'seeded': [], 'completed': [], 'reopened': []})
+        self.assertFalse(StudentOnboarding.objects.filter(student=self.student).exists())
+
+    def test_create_false_recalculates_an_existing_record(self):
+        self._register('classes', complete_when=lambda s, t: True)
+        api.add_step(self.student, key='classes', label='Classes')
+        result = api.recalculate(self.student, create=False)
+        self.assertEqual(result['completed'], ['classes'])
+
     def test_reopen_step_leaves_not_applicable_alone(self):
         api.add_step(self.student, key='verify_info', label='V')
         api.mark_not_applicable(self.student, key='verify_info')

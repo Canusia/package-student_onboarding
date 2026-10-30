@@ -176,7 +176,7 @@ def _still_due(step, student, term):
         return False
 
 
-def recalculate(student, *, term=None):
+def recalculate(student, *, term=None, create=True):
     """Bring the student's checklist for `term` (default: the active term) in
     line with the registered step predicates.
 
@@ -189,6 +189,10 @@ def recalculate(student, *, term=None):
 
     Returns {'seeded': [...], 'completed': [...], 'reopened': [...]} (step
     keys). With no active term nothing is created and the lists are empty.
+
+    With ``create=False`` a student with no onboarding record for the term is
+    left alone (empty lists): signal-triggered recalculation uses it so a
+    registration change never starts onboarding for a past student.
     """
     from .step_registry import all_steps
 
@@ -197,8 +201,14 @@ def recalculate(student, *, term=None):
     if term is None:
         return result
 
+    if create:
+        onboarding = get_or_create_for_current_term(student, term=term)
+    else:
+        onboarding = StudentOnboarding.objects.filter(
+            student=student, term=term).first()
+        if onboarding is None:
+            return result
     steps = all_steps()
-    onboarding = get_or_create_for_current_term(student, term=term)
     rows = {row.key: row.status for row in onboarding.steps.all()}
 
     for step in steps:
