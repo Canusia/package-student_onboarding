@@ -1478,6 +1478,22 @@ class OnboardingCampusScopeTests(TestCase):
         data = self._get('stalled', self.ce_a, days='7').json()['data']
         self.assertEqual({r['student_id'] for r in data}, {str(self.student_a.id)})
 
+    def test_stalled_lists_pending_step_names_in_step_order(self):
+        onboarding = StudentOnboarding.objects.get(student=self.student_a, term=self.term)
+        S = StudentOnboardingStep
+        S.objects.filter(onboarding=onboarding).update(order=20)
+        for key, label, status, order in (
+                ('docs', 'Supporting Documents', S.STATUS_PENDING, 10),
+                ('consent', 'Parent Consent', S.STATUS_COMPLETED, 5),
+                ('sa', 'Scholarship', S.STATUS_NOT_APPLICABLE, 1)):
+            S.objects.create(onboarding=onboarding, key=key, label=label,
+                             status=status, order=order)
+        S.objects.filter(onboarding=onboarding, key='consent').update(
+            completed_on=timezone.now() - datetime.timedelta(days=30))
+        data = self._get('stalled', self.ce_a, days='7').json()['data']
+        row = next(r for r in data if r['student_id'] == str(self.student_a.id))
+        self.assertEqual(row['pending_steps'], ['Supporting Documents', 'FERPA'])
+
     def test_funnel_counts_only_in_scope_steps(self):
         rows = self._get('funnel', self.ce_a).json()
         self.assertEqual(sum(r['pending'] for r in rows), 1)
@@ -2030,6 +2046,15 @@ class RecalculateEndpointTests(TestCase):
         self.assertEqual(payload['status'], 'success')
         self.assertEqual(
             payload['message'], '2 step(s) completed, 0 reopened, 1 added.')
+
+    def test_stalled_tab_has_csv_export_and_pending_column(self):
+        from django.template.loader import render_to_string
+        html = render_to_string(
+            'student_onboarding/ce/_tab_stalled.html', {}, request=None)
+        self.assertIn('<th>Pending Steps</th>', html)
+        self.assertIn("data: 'pending_steps'", html)
+        self.assertIn("extend: 'csv'", html)
+        self.assertIn("orthogonal: 'export'", html)
 
     def test_stalled_tab_renders_buttons(self):
         from django.template.loader import render_to_string

@@ -166,6 +166,11 @@ class OnboardingStalledView(views.APIView):
                 Q(latest_step_completion__lt=cutoff) |
                 Q(latest_step_completion__isnull=True, started_on__lt=cutoff)
             )
+            .prefetch_related(Prefetch(
+                'steps',
+                queryset=StudentOnboardingStep.objects.filter(
+                    status=StudentOnboardingStep.STATUS_PENDING).order_by('order', 'label'),
+                to_attr='pending_step_rows'))
             .order_by('started_on')
         )
 
@@ -181,6 +186,7 @@ class OnboardingStalledView(views.APIView):
             'last_notified_on': o.last_notified_on,
             'progress_percent': o.progress_percent,
             'pending_count': o.total_steps - o.completed_steps,
+            'pending_steps': [step.label for step in o.pending_step_rows],
         } for o in qs]
 
         return Response({
