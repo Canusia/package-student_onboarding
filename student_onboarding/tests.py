@@ -971,6 +971,32 @@ class PendingNotificationsViewTests(TestCase):
         self.assertIsNotNone(response.context['skip_reason'])
         self.assertEqual(response.context['rows'], [])
 
+    def test_csv_export_lists_students_and_pending_items(self):
+        import csv, io
+        self._patch_plan()
+        self.student.user.first_name = '=HYPERLINK("x")'
+        self.student.user.save()
+        api.add_step(self.student, key='ferpa', label='FERPA')
+        url = reverse('student_onboarding_ce:pending_notifications')
+        page = self.client.get(url, {'term_id': str(self.term.id)})
+        self.assertContains(page, f'?export=csv&amp;term_id={self.term.id}')
+        response = self.client.get(url, {'term_id': str(self.term.id), 'export': 'csv'})
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertIn('attachment;', response['Content-Disposition'])
+        rows = list(csv.reader(io.StringIO(response.content.decode())))
+        self.assertEqual(rows[0], ['First Name', 'Last Name', 'Student Email',
+                                   'High School', 'Recipients', 'Pending Items'])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1][0], '\'=HYPERLINK("x")')  # never a formula
+        self.assertEqual(rows[1][2], self.student.user.email)
+        self.assertIn('FERPA', rows[1][5])
+
+    def test_csv_export_requires_ce(self):
+        self.client.logout()
+        response = self.client.get(
+            reverse('student_onboarding_ce:pending_notifications'), {'export': 'csv'})
+        self.assertEqual(response.status_code, 302)
+
     def test_view_details_link_carries_the_selected_term_id(self):
         self._patch_plan()
         api.add_step(self.student, key='ferpa', label='FERPA')

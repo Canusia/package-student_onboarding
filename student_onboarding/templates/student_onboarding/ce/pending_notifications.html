@@ -45,6 +45,11 @@
                         No student currently qualifies for a reminder in this term.
                     </div>
                 {% else %}
+                    <a class="btn btn-sm btn-primary text-white float-right ml-3"
+                       title="Export these students and their pending items to CSV"
+                       href="?export=csv{% if selected_term %}&amp;term_id={{ selected_term.id }}{% endif %}">
+                        <i class="fas fa-file-csv text-white"></i>&nbsp;CSV
+                    </a>
                     <p class="mb-3">
                         {% if is_active_term %}
                             <strong>{{ rows|length }}</strong> student(s) would be emailed at the

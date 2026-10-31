@@ -341,6 +341,34 @@ class OnboardingFunnelView(views.APIView):
         return Response(list(rows))
 
 
+def _csv_cell(value):
+    """Text for a CSV cell; a leading =, +, - or @ is quoted with ' so a
+    spreadsheet never runs it as a formula."""
+    text = '' if value is None else str(value)
+    return "'" + text if text[:1] in ('=', '+', '-', '@') else text
+
+
+def _pending_notifications_csv(rows, term):
+    """The pending-reminders rows as a CSV download, pending items included."""
+    import csv
+    from django.http import HttpResponse
+
+    response = HttpResponse(content_type='text/csv')
+    name = 'onboarding_reminders' + (f'_{term.code}' if term and getattr(term, 'code', '') else '')
+    response['Content-Disposition'] = f'attachment; filename="{name}.csv"'
+    writer = csv.writer(response)
+    writer.writerow(['First Name', 'Last Name', 'Student Email', 'High School',
+                     'Recipients', 'Pending Items'])
+    for row in rows:
+        user = row.student.user
+        writer.writerow([_csv_cell(v) for v in (
+            user.first_name, user.last_name, user.email,
+            row.student.highschool or '',
+            ', '.join(row.to_email), '; '.join(str(i) for i in row.missing_items),
+        )])
+    return response
+
+
 def pending_notifications(request):
     """CE page: who the next scheduled onboarding reminder would email.
 
@@ -373,6 +401,9 @@ def pending_notifications(request):
         # from the rows we already have in memory.
         rows = [row for row in plan.sendable
                 if can_access_student(request.user, row.student)]
+
+    if request.GET.get('export') == 'csv':
+        return _pending_notifications_csv(rows, term)
 
     return render(request, 'student_onboarding/ce/pending_notifications.html', {
         'page_title': 'Onboarding Reminders',
