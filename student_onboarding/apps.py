@@ -54,6 +54,7 @@ class StudentOnboardingConfig(AppConfig):
         # project and pulls in cis, which is not importable until the app
         # registry is populated.
         from . import actions  # noqa: F401
+        from . import menu  # noqa: F401  sidebar items (cis.menu_registry)
 
 
 class DevStudentOnboardingConfig(StudentOnboardingConfig):
