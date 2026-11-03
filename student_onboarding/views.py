@@ -6,7 +6,7 @@ import uuid
 
 from django.db.models import Count, Q, Max, F, Prefetch
 from django.utils import timezone
-from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.http import url_has_allowed_host_and_scheme, urlencode
 from django.views.decorators.clickjacking import xframe_options_exempt
 from rest_framework import viewsets, views
 from rest_framework.response import Response
@@ -369,6 +369,29 @@ def _pending_notifications_csv(rows, term):
     return response
 
 
+def _search_rows(rows, student='', highschool=''):
+    """Rows whose student name / email contains ``student`` and whose high
+    school name contains ``highschool`` (case-insensitive; blank matches all)."""
+    student, highschool = student.lower(), highschool.lower()
+
+    def matches(row):
+        user = row.student.user
+        if student:
+            names = (f'{user.first_name} {user.last_name}',
+                     f'{user.last_name}, {user.first_name}',
+                     f'{user.last_name} {user.first_name}',
+                     user.email or '')
+            if not any(student in n.lower() for n in names):
+                return False
+        if highschool:
+            school = row.student.highschool
+            if not school or highschool not in (school.name or '').lower():
+                return False
+        return True
+
+    return [row for row in rows if matches(row)]
+
+
 def pending_notifications(request):
     """CE page: who the next scheduled onboarding reminder would email.
 
@@ -402,6 +425,13 @@ def pending_notifications(request):
         rows = [row for row in plan.sendable
                 if can_access_student(request.user, row.student)]
 
+    total_rows = len(rows)
+    search = {
+        'student': (request.GET.get('student') or '').strip(),
+        'highschool': (request.GET.get('highschool') or '').strip(),
+    }
+    rows = _search_rows(rows, **search)
+
     if request.GET.get('export') == 'csv':
         return _pending_notifications_csv(rows, term)
 
@@ -409,6 +439,9 @@ def pending_notifications(request):
         'page_title': 'Onboarding Reminders',
         'menu': menu,
         'rows': rows,
+        'total_rows': total_rows,
+        'search': search,
+        'search_query': urlencode({k: v for k, v in search.items() if v}),
         'skip_reason': skip_reason,
         'debug_mode': False if skip_reason else plan.debug_mode,
         'terms': Term.objects.all(),

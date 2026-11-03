@@ -25,7 +25,16 @@
                                     {% if selected_term and t.id == selected_term.id %}selected{% endif %}>{{ t }}</option>
                             {% endfor %}
                         </select>
-                        <button type="submit" class="btn btn-sm btn-primary">Apply</button>
+                        <label class="mr-2" for="search_student">Student</label>
+                        <input type="search" id="search_student" name="student" value="{{ search.student }}"
+                               class="form-control form-control-sm mr-2" placeholder="Name or email">
+                        <label class="mr-2" for="search_highschool">High School</label>
+                        <input type="search" id="search_highschool" name="highschool" value="{{ search.highschool }}"
+                               class="form-control form-control-sm mr-2" placeholder="School name">
+                        <button type="submit" class="btn btn-sm btn-primary mr-2">Apply</button>
+                        {% if search_query %}
+                            <a class="btn btn-sm btn-light" href="?{% if selected_term %}term_id={{ selected_term.id }}{% endif %}">Clear search</a>
+                        {% endif %}
                     </form>
                 </div>
             </div>
@@ -40,17 +49,25 @@
                     </div>
                 {% endif %}
 
-                {% if not rows %}
+                {% if not rows and total_rows %}
+                    <div class="alert alert-info">
+                        No student matches the search. {{ total_rows }} student(s) qualify for a
+                        reminder in this term.
+                    </div>
+                {% elif not rows %}
                     <div class="alert alert-info">
                         No student currently qualifies for a reminder in this term.
                     </div>
                 {% else %}
                     <a class="btn btn-sm btn-primary text-white float-right ml-3"
                        title="Export these students and their pending items to CSV"
-                       href="?export=csv{% if selected_term %}&amp;term_id={{ selected_term.id }}{% endif %}">
+                       href="?export=csv{% if selected_term %}&amp;term_id={{ selected_term.id }}{% endif %}{% if search_query %}&amp;{{ search_query }}{% endif %}">
                         <i class="fas fa-file-csv text-white"></i>&nbsp;CSV
                     </a>
                     <p class="mb-3">
+                        {% if search_query %}
+                            Showing <strong>{{ rows|length }}</strong> of {{ total_rows }} student(s) matching the search.
+                        {% endif %}
                         {% if is_active_term %}
                             <strong>{{ rows|length }}</strong> student(s) would be emailed at the
                             next scheduled run. This is a snapshot taken just now - a student who

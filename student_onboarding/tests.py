@@ -1024,6 +1024,49 @@ class PendingNotificationsViewTests(TestCase):
         self.assertContains(response, 'what-if')
         self.assertNotContains(response, 'would be emailed at the')
 
+    def _two_students(self):
+        self._patch_plan()
+        self.student.user.first_name, self.student.user.last_name = 'Ada', 'Lovelace'
+        self.student.user.save()
+        self.student.highschool = HighSchool.objects.create(name='Riverside High')
+        self.student.save()
+        other = Student.objects.create(user=_make_user(first_name='Alan', last_name='Turing'))
+        other.highschool = HighSchool.objects.create(name='Hilltop Academy')
+        other.save()
+        for s in (self.student, other):
+            api.add_step(s, key='ferpa', label='FERPA')
+        return other
+
+    def _names(self, response):
+        return sorted(r.student.user.last_name for r in response.context['rows'])
+
+    def test_search_by_student_name(self):
+        self._two_students()
+        url = reverse('student_onboarding_ce:pending_notifications')
+        self.assertEqual(self._names(self.client.get(url, {'student': 'love'})), ['Lovelace'])
+        self.assertEqual(self._names(self.client.get(url, {'student': 'alan turing'})), ['Turing'])
+        page = self.client.get(url, {'student': 'nobody'})
+        self.assertEqual(page.context['rows'], [])
+        self.assertContains(page, 'No student matches the search')
+
+    def test_search_by_high_school(self):
+        self._two_students()
+        url = reverse('student_onboarding_ce:pending_notifications')
+        response = self.client.get(url, {'highschool': 'hilltop'})
+        self.assertEqual(self._names(response), ['Turing'])
+        self.assertContains(response, 'value="hilltop"')
+
+    def test_csv_export_follows_the_search(self):
+        import csv, io
+        self._two_students()
+        url = reverse('student_onboarding_ce:pending_notifications')
+        page = self.client.get(url, {'term_id': str(self.term.id), 'highschool': 'river'})
+        self.assertContains(page, 'highschool=river')
+        response = self.client.get(url, {'term_id': str(self.term.id),
+                                         'highschool': 'river', 'export': 'csv'})
+        rows = list(csv.reader(io.StringIO(response.content.decode())))
+        self.assertEqual([r[1] for r in rows[1:]], ['Lovelace'])
+
 
 class PendingOnboardingActionTests(TestCase):
     @classmethod
