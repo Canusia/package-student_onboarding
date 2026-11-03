@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme, urlencode
 from django.views.decorators.clickjacking import xframe_options_exempt
 from rest_framework import viewsets, views
+from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from cis.utils import CIS_user_only, active_term
@@ -92,7 +93,67 @@ class OnboardingByStudentViewSet(viewsets.ReadOnlyModelViewSet):
         elif status == 'pending':
             qs = qs.filter(completed_on__isnull=True)
 
+        # One step in one state, e.g. step=ferpa&step_status=pending (the
+        # chart's bars and the "Item" filter). Subquery, so no duplicate rows.
+        step_key = self.request.GET.get('step', '').strip()
+        if step_key:
+            step_status = self.request.GET.get('step_status', '').strip()
+            if step_status not in STEP_STATUSES:
+                step_status = StudentOnboardingStep.STATUS_PENDING
+            qs = qs.filter(pk__in=StudentOnboardingStep.objects.filter(
+                key=step_key, status=step_status).values('onboarding_id'))
+
         return _scope_to_user(qs, self.request.user)
+
+    @action(detail=False, methods=['get'], url_path='export')
+    def export(self, request):
+        """Every row matching the table's filters and search box, as CSV
+        (the DataTables CSV button only exports the page on screen)."""
+        import csv
+        from django.http import HttpResponse
+
+        qs = self.get_queryset()
+        for word in (request.GET.get('q') or '').split():
+            qs = qs.filter(
+                Q(student__user__first_name__icontains=word)
+                | Q(student__user__last_name__icontains=word)
+                | Q(student__user__email__icontains=word)
+                | Q(student__highschool__name__icontains=word))
+        qs = qs.order_by('student__user__last_name', 'student__user__first_name', 'id')
+
+        term = _resolve_term(request)
+        name = 'onboarding_by_student' + (f'_{term.code}' if term and getattr(term, 'code', '') else '')
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{name}.csv"'
+        writer = csv.writer(response)
+        writer.writerow(['Last Name', 'First Name', 'Email', 'High School', 'Started',
+                         'Progress %', 'Steps Done', 'Pending Items', 'Last Progress',
+                         'Last Notified', 'Completed On'])
+        serializer = OnboardingByStudentSerializer()
+
+        def when(value):
+            return timezone.localtime(value).strftime('%m/%d/%Y') if value else ''
+
+        for record in qs.iterator(chunk_size=500):
+            user = record.student.user
+            school = record.student.highschool
+            writer.writerow([_csv_cell(v) for v in (
+                user.last_name, user.first_name, user.email,
+                school.name if school else '',
+                when(record.started_on), record.progress_percent,
+                f'{record.completed_steps} of {record.total_steps}',
+                '; '.join(serializer.get_pending_steps(record)),
+                when(serializer.get_last_step_completed_on(record)),
+                when(record.last_notified_on), when(record.completed_on),
+            )])
+        return response
+
+
+STEP_STATUSES = {
+    StudentOnboardingStep.STATUS_PENDING,
+    StudentOnboardingStep.STATUS_COMPLETED,
+    StudentOnboardingStep.STATUS_NOT_APPLICABLE,
+}
 
 
 class OnboardingByHighSchoolView(views.APIView):

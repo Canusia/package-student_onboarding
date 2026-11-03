@@ -1539,6 +1539,12 @@ class OnboardingCampusScopeTests(TestCase):
         rows = rows['results'] if isinstance(rows, dict) else rows
         self.assertEqual({r['student_id'] for r in rows}, {str(self.student_a.id)})
 
+    def test_by_student_export_hides_other_campus_students(self):
+        import csv, io
+        response = self._get('onboarding_by_student-export', self.ce_a)
+        rows = list(csv.reader(io.StringIO(response.content.decode())))
+        self.assertEqual([r[2] for r in rows[1:]], [self.student_a.user.email])
+
     def test_by_highschool_counts_only_in_scope_students(self):
         data = self._get('by_highschool', self.ce_a).json()['data']
         self.assertEqual(sum(r['total'] for r in data), 1)
@@ -2241,3 +2247,96 @@ class OnboardingPendingItemsReportTests(TestCase):
         names = [r['name'] for r in config.REPORTS]
         self.assertIn('onboarding_pending_items', names)
         self.assertTrue(all(r['app'] == config.name for r in config.REPORTS))
+
+
+class ByStudentStepFilterAndExportTests(TestCase):
+    """Onboarding by Student: filter by one step's status (chart bars / Item
+    filter) and export every matching row, not just the page on screen."""
+
+    @classmethod
+    def setUpClass(cls):
+        if _login_history_post_login is not None:
+            user_logged_in.disconnect(_login_history_post_login)
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        if _login_history_post_login is not None:
+            user_logged_in.connect(_login_history_post_login)
+
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        Group.objects.get_or_create(name='ce')
+        cls.term = _make_term('BS1')
+
+    def setUp(self):
+        for target in (f'{PKG}.api.active_term', f'{PKG}.views.active_term'):
+            p = patch(target, return_value=self.term)
+            p.start(); self.addCleanup(p.stop)
+        self.staff = CustomUser.objects.create_superuser(
+            username=f'su-{uuid.uuid4()}', email=f'su-{uuid.uuid4()}@example.com',
+            password='x')
+        self.staff.groups.add(Group.objects.get(name='ce'))
+        self.client.force_login(self.staff)
+
+        self.ada = Student.objects.create(user=_make_user(first_name='Ada', last_name='Lovelace'))
+        self.ada.highschool = HighSchool.objects.create(name='Riverside High')
+        self.ada.save()
+        self.alan = Student.objects.create(user=_make_user(first_name='Alan', last_name='Turing'))
+        for s in (self.ada, self.alan):
+            api.add_step(s, key='ferpa', label='FERPA')
+        api.complete_step(self.alan, key='ferpa')
+
+    def _rows(self, **params):
+        params.setdefault('term_id', str(self.term.id))
+        data = self.client.get(
+            reverse('student_onboarding_ce:onboarding_by_student-list'),
+            dict(params, format='json')).json()
+        data = data['results'] if isinstance(data, dict) else data
+        return sorted(r['last_name'] for r in data)
+
+    def _export(self, **params):
+        import csv, io
+        params.setdefault('term_id', str(self.term.id))
+        response = self.client.get(
+            reverse('student_onboarding_ce:onboarding_by_student-export'), params)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        return list(csv.reader(io.StringIO(response.content.decode())))
+
+    def test_step_filter(self):
+        self.assertEqual(self._rows(), ['Lovelace', 'Turing'])
+        self.assertEqual(self._rows(step='ferpa', step_status='pending'), ['Lovelace'])
+        self.assertEqual(self._rows(step='ferpa', step_status='completed'), ['Turing'])
+        self.assertEqual(self._rows(step='ferpa', step_status='bogus'), ['Lovelace'])
+        self.assertEqual(self._rows(step='nope'), [])
+
+    def test_export_has_every_matching_row(self):
+        rows = self._export()
+        self.assertEqual(rows[0][:4], ['Last Name', 'First Name', 'Email', 'High School'])
+        self.assertEqual([r[0] for r in rows[1:]], ['Lovelace', 'Turing'])
+        lovelace = rows[1]
+        self.assertEqual(lovelace[3], 'Riverside High')
+        self.assertIn('FERPA', lovelace[7])
+
+    def test_export_follows_step_filter_and_search(self):
+        self.assertEqual([r[0] for r in self._export(step='ferpa')[1:]], ['Lovelace'])
+        self.assertEqual([r[0] for r in self._export(q='turing')[1:]], ['Turing'])
+        self.assertEqual([r[0] for r in self._export(q='riverside')[1:]], ['Lovelace'])
+
+    def test_export_requires_ce(self):
+        self.client.force_login(_make_user())
+        response = self.client.get(
+            reverse('student_onboarding_ce:onboarding_by_student-export'),
+            {'term_id': str(self.term.id)})
+        self.assertIn(response.status_code, (302, 403))
+
+    def test_tab_wires_chart_clicks_filter_and_export(self):
+        from django.template.loader import get_template
+        source = get_template('student_onboarding/ce/_tab_by_student.html').template.source
+        self.assertIn('onClick: function (evt, elements)', source)
+        self.assertIn('id="onboarding_by_student_step"', source)
+        self.assertIn('/ce/onboarding/api/by_student/export/?', source)
+        self.assertNotIn("extend: 'csv'", source)

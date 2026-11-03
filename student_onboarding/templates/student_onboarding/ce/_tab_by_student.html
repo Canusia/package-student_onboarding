@@ -1,9 +1,23 @@
 <div class="tab-pane" id="onboarding_by_student">
     <div class="bg-white border border-top-0 p-3">
         {% include "student_onboarding/ce/_term_select.html" with tab_id="onboarding_by_student" %}
+        <form class="form-inline mb-2" id="onboarding_by_student_step_filter" onsubmit="return false;">
+            <label class="mr-2" for="onboarding_by_student_step">Item:</label>
+            <select id="onboarding_by_student_step" class="form-control form-control-sm mr-2">
+                <option value="">All students</option>
+            </select>
+            <label class="mr-2" for="onboarding_by_student_step_status">Status:</label>
+            <select id="onboarding_by_student_step_status" class="form-control form-control-sm mr-2">
+                <option value="pending">Pending</option>
+                <option value="completed">Completed</option>
+                <option value="not_applicable">Not Applicable</option>
+            </select>
+            <button type="button" class="btn btn-sm btn-light d-none" id="onboarding_by_student_step_clear">Clear filter</button>
+        </form>
         <div class="mb-4" style="height: 260px;">
             <canvas id="onboarding_by_student_funnel"></canvas>
         </div>
+        <p class="small text-muted mb-3">Click a bar to list the students with that item in that status.</p>
         <table id="onboarding_by_student_table" class="table table-striped responsive" style="width:100%">
             <thead>
                 <tr>
@@ -28,14 +42,47 @@
             var bulkActionsUrl = '{% url "cis:student_bulk_actions" %}';
             var dt = null;
             var funnelChart = null;
+            var funnelRows = [];
+            var STATUSES = ['completed', 'pending', 'not_applicable'];  // dataset order below
+            function filterParams() {
+                var params = 'term_id=' + encodeURIComponent($('#onboarding_by_student_term').val() || '');
+                var step = $('#onboarding_by_student_step').val();
+                if (step) {
+                    params += '&step=' + encodeURIComponent(step)
+                        + '&step_status=' + encodeURIComponent($('#onboarding_by_student_step_status').val());
+                }
+                return params;
+            }
             function apiUrl() {
-                return '/ce/onboarding/api/by_student/?format=datatables&term_id=' + $('#onboarding_by_student_term').val();
+                return '/ce/onboarding/api/by_student/?format=datatables&' + filterParams();
+            }
+            function exportUrl() {
+                var q = dt ? dt.search() : '';
+                return '/ce/onboarding/api/by_student/export/?' + filterParams()
+                    + (q ? '&q=' + encodeURIComponent(q) : '');
+            }
+            function fillStepOptions(rows) {
+                var select = $('#onboarding_by_student_step');
+                var current = select.val();
+                select.find('option:not(:first)').remove();
+                rows.forEach(function (r) {
+                    select.append($('<option>').val(r.key).text(r.label || r.key));
+                });
+                select.val(rows.some(function (r) { return r.key === current; }) ? current : '');
+                $('#onboarding_by_student_step_clear').toggleClass('d-none', !select.val());
+            }
+            function applyStepFilter() {
+                $('#onboarding_by_student_step_clear').toggleClass(
+                    'd-none', !$('#onboarding_by_student_step').val());
+                if (dt) dt.ajax.url(apiUrl()).load();
             }
             function funnelUrl() {
                 return '/ce/onboarding/api/funnel/?term_id=' + $('#onboarding_by_student_term').val();
             }
             function loadFunnel() {
                 $.getJSON(funnelUrl(), function (rows) {
+                    funnelRows = rows;
+                    fillStepOptions(rows);
                     var labels = rows.map(function (r) { return r.label || r.key; });
                     var completed = rows.map(function (r) { return r.completed; });
                     var pending = rows.map(function (r) { return r.pending; });
@@ -55,6 +102,17 @@
                             indexAxis: 'y',
                             responsive: true,
                             maintainAspectRatio: false,
+                            onClick: function (evt, elements) {
+                                if (!elements || !elements.length) return;
+                                var row = funnelRows[elements[0].index];
+                                if (!row) return;
+                                $('#onboarding_by_student_step').val(row.key);
+                                $('#onboarding_by_student_step_status').val(STATUSES[elements[0].datasetIndex]);
+                                applyStepFilter();
+                            },
+                            onHover: function (evt, elements) {
+                                evt.native.target.style.cursor = elements && elements.length ? 'pointer' : 'default';
+                            },
                             scales: {
                                 x: { stacked: true, beginAtZero: true },
                                 y: { stacked: true }
@@ -83,9 +141,10 @@
                     dom: 'B<"float-left mt-3 mb-3"l><"float-right mt-3"f><"row clear">rt<"row"<"col-6"i><"col-6 float-right"p>>',
                     buttons: [
                         {
-                            extend: 'csv', className: 'btn btn-sm btn-primary text-white text-light',
-                            text: '<i class="fas fa-file-csv text-white"></i>&nbsp;CSV',
-                            titleAttr: 'Export Records in Current View to CSV'
+                            className: 'btn btn-sm btn-primary text-white text-light',
+                            text: '<i class="fas fa-file-csv text-white"></i>&nbsp;CSV (all rows)',
+                            titleAttr: 'Export every row matching the filters and search to CSV',
+                            action: function () { window.location = exportUrl(); }
                         },
                         {
                             extend: 'print', className: 'btn btn-sm btn-primary text-white text-light',
@@ -152,6 +211,12 @@
             $('#onboarding_by_student_term').on('change', function () {
                 loadFunnel();
                 if (dt) dt.ajax.url(apiUrl()).load();
+            });
+            $('#onboarding_by_student_step, #onboarding_by_student_step_status').on('change', applyStepFilter);
+            $('#onboarding_by_student_step_clear').on('click', function () {
+                $('#onboarding_by_student_step').val('');
+                $('#onboarding_by_student_step_status').val('pending');
+                applyStepFilter();
             });
         });
     </script>
