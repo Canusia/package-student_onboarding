@@ -29,7 +29,8 @@ from cis.models.term import Term
 from cis.utils import active_term, user_has_cis_role
 
 from .. import step_registry
-from ..models import StudentOnboarding, StudentOnboardingStep
+from ..csv_safe import csv_cell
+from ..models import DailyOnboardingStats, StudentOnboarding, StudentOnboardingStep
 
 HEADERS = ['First Name', 'Last Name', 'Email', 'Student ID', 'High School',
            'Term', 'Pending Items', 'Steps Done', 'Last Reminder']
@@ -42,10 +43,7 @@ def _list(values):
     return [str(getattr(v, 'pk', v)) for v in values if v not in (None, '')]
 
 
-def _csv_cell(value):
-    """A leading =, +, - or @ is quoted with ' so a spreadsheet never runs it."""
-    text = '' if value is None else str(value)
-    return "'" + text if text[:1] in ('=', '+', '-', '@') else text
+_csv_cell = csv_cell
 
 
 def _highschool_choices():
@@ -57,19 +55,21 @@ def _highschool_choices():
 
 
 def _step_choices():
-    """Registered steps plus any key already stored (a step a tenant has since
-    dropped from the registry still shows up by its stored label)."""
+    """Registered steps, plus keys from the daily stats rollup (a step a tenant
+    has since dropped from the registry). The rollup is small; the steps
+    table itself is not, and this runs every time the form is built."""
     choices = {s.key: s.label for s in step_registry.all_steps()}
-    for key, label in (StudentOnboardingStep.objects
-                       .values_list('key', 'label').distinct().order_by('key')):
-        choices.setdefault(key, label or key)
+    for key in (DailyOnboardingStats.objects.exclude(step_key='')
+                .values_list('step_key', flat=True).distinct().order_by('step_key')):
+        choices.setdefault(key, key)
     return list(choices.items())
 
 
 def scoped_onboardings(user, term_id, step_keys=None, highschool_ids=None):
     """pending_onboardings() limited to the students ``user`` may see: none
     for a non-CE user, campus-scoped for CE staff, all for superusers."""
-    if user is None or not user_has_cis_role(user):
+    if user is None or not (getattr(user, 'is_superuser', False)
+                            or user_has_cis_role(user)):
         return []
     scope = None
     try:

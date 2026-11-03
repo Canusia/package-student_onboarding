@@ -1539,6 +1539,12 @@ class OnboardingCampusScopeTests(TestCase):
         rows = rows['results'] if isinstance(rows, dict) else rows
         self.assertEqual({r['student_id'] for r in rows}, {str(self.student_a.id)})
 
+    def test_pending_items_report_hides_other_campus_students(self):
+        from importlib import import_module
+        mod = import_module(f'{PKG}.reports.onboarding_pending_items')
+        records = mod.scoped_onboardings(self.ce_a, str(self.term.id), step_keys=['ferpa'])
+        self.assertEqual([r.student_id for r in records], [self.student_a.id])
+
     def test_by_student_export_hides_other_campus_students(self):
         import csv, io
         response = self._get('onboarding_by_student-export', self.ce_a)
@@ -2190,6 +2196,12 @@ class OnboardingPendingItemsReportTests(TestCase):
             self.staff, str(self.term.id), highschool_ids=[str(self.ada.highschool_id)])
         self.assertEqual(self._names(records), ['Lovelace'])
 
+    def test_superuser_without_ce_group_sees_all(self):
+        su = CustomUser.objects.create_superuser(
+            username=f'su2-{uuid.uuid4()}', email=f'su2-{uuid.uuid4()}@example.com', password='x')
+        records = self.mod.scoped_onboardings(su, str(self.term.id))
+        self.assertEqual(self._names(records), ['Lovelace', 'Turing'])
+
     def test_non_ce_user_gets_nothing(self):
         nobody = _make_user()
         self.assertEqual(self.mod.scoped_onboardings(nobody, str(self.term.id)), [])
@@ -2340,3 +2352,13 @@ class ByStudentStepFilterAndExportTests(TestCase):
         self.assertIn('id="onboarding_by_student_step"', source)
         self.assertIn('/ce/onboarding/api/by_student/export/?', source)
         self.assertNotIn("extend: 'csv'", source)
+
+
+class CsvSafeTests(TestCase):
+    def test_formula_starts_are_quoted(self):
+        from importlib import import_module
+        csv_cell = import_module(f'{PKG}.csv_safe').csv_cell
+        for raw in ('=1+1', '+1', '-1', '@SUM(A1)', '\t=1', '\r=1'):
+            self.assertEqual(csv_cell(raw), "'" + raw)
+        self.assertEqual(csv_cell('Ada'), 'Ada')
+        self.assertEqual(csv_cell(None), '')

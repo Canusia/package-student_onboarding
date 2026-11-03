@@ -21,6 +21,7 @@ from .models import (
     DailyOnboardingStats,
 )
 from .api import recalculate
+from .csv_safe import csv_cell
 from .serializers import OnboardingByStudentSerializer
 
 logger = logging.getLogger(__name__)
@@ -402,11 +403,7 @@ class OnboardingFunnelView(views.APIView):
         return Response(list(rows))
 
 
-def _csv_cell(value):
-    """Text for a CSV cell; a leading =, +, - or @ is quoted with ' so a
-    spreadsheet never runs it as a formula."""
-    text = '' if value is None else str(value)
-    return "'" + text if text[:1] in ('=', '+', '-', '@') else text
+_csv_cell = csv_cell
 
 
 def _pending_notifications_csv(rows, term):

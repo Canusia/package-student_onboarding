@@ -36,7 +36,7 @@
             </thead>
         </table>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
     <script>
         $(function () {
             var bulkActionsUrl = '{% url "cis:student_bulk_actions" %}';
@@ -79,10 +79,13 @@
             function funnelUrl() {
                 return '/ce/onboarding/api/funnel/?term_id=' + $('#onboarding_by_student_term').val();
             }
-            function loadFunnel() {
+            function loadFunnel(then) {
                 $.getJSON(funnelUrl(), function (rows) {
                     funnelRows = rows;
                     fillStepOptions(rows);
+                    // After the Item options are refreshed, so a step the new
+                    // term lacks is cleared before the table reloads.
+                    if (then) then();
                     var labels = rows.map(function (r) { return r.label || r.key; });
                     var completed = rows.map(function (r) { return r.completed; });
                     var pending = rows.map(function (r) { return r.pending; });
@@ -143,7 +146,7 @@
                         {
                             className: 'btn btn-sm btn-primary text-white text-light',
                             text: '<i class="fas fa-file-csv text-white"></i>&nbsp;CSV (all rows)',
-                            titleAttr: 'Export every row matching the filters and search to CSV',
+                            titleAttr: 'Export every row matching the term, item filter and search (name, email or high school) to CSV',
                             action: function () { window.location = exportUrl(); }
                         },
                         {
@@ -209,8 +212,9 @@
             $('a[data-toggle="tab"][href="#onboarding_by_student"]').one('shown.bs.tab', init);
             if ($('#onboarding_by_student').hasClass('active')) init();
             $('#onboarding_by_student_term').on('change', function () {
-                loadFunnel();
-                if (dt) dt.ajax.url(apiUrl()).load();
+                loadFunnel(function () {
+                    if (dt) dt.ajax.url(apiUrl()).load();
+                });
             });
             $('#onboarding_by_student_step, #onboarding_by_student_step_status').on('change', applyStepFilter);
             $('#onboarding_by_student_step_clear').on('click', function () {
