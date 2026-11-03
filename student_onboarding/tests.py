@@ -2131,3 +2131,113 @@ class RecalculateEndpointTests(TestCase):
             'student_onboarding/ce/_tab_stalled.html', {}, request=None)
         self.assertIn('onboarding_recalc_all', html)
         self.assertIn('/ce/onboarding/api/recalculate/', html)
+
+
+class OnboardingPendingItemsReportTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        Group.objects.get_or_create(name='student')
+        Group.objects.get_or_create(name='ce')
+        cls.term = _make_term('RP1')
+
+    def setUp(self):
+        from importlib import import_module
+        self.mod = import_module(f'{PKG}.reports.onboarding_pending_items')
+        for target in (f'{PKG}.api.active_term',
+                       f'{PKG}.reports.onboarding_pending_items.active_term'):
+            p = patch(target, return_value=self.term)
+            p.start(); self.addCleanup(p.stop)
+        self.staff = CustomUser.objects.create_superuser(
+            username=f'su-{uuid.uuid4()}', email=f'su-{uuid.uuid4()}@example.com',
+            password='x')
+        self.staff.groups.add(Group.objects.get(name='ce'))
+
+        self.ada = Student.objects.create(user=_make_user(first_name='Ada', last_name='Lovelace'))
+        self.ada.highschool = HighSchool.objects.create(name='Riverside High')
+        self.ada.save()
+        api.add_step(self.ada, key='ferpa', label='FERPA')
+        api.add_step(self.ada, key='classes', label='Register for Classes')
+
+        self.alan = Student.objects.create(user=_make_user(first_name='Alan', last_name='Turing'))
+        api.add_step(self.alan, key='classes', label='Register for Classes')
+
+        self.done = Student.objects.create(user=_make_user(first_name='Grace', last_name='Hopper'))
+        api.add_step(self.done, key='ferpa', label='FERPA')
+        StudentOnboarding.objects.filter(student=self.done).update(completed_on=timezone.now())
+
+    def _names(self, records):
+        return sorted(r.student.user.last_name for r in records)
+
+    def test_any_pending_item_by_default(self):
+        records = self.mod.scoped_onboardings(self.staff, str(self.term.id))
+        self.assertEqual(self._names(records), ['Lovelace', 'Turing'])
+
+    def test_filter_by_pending_item(self):
+        records = self.mod.scoped_onboardings(self.staff, str(self.term.id),
+                                              step_keys=['ferpa'])
+        self.assertEqual(self._names(records), ['Lovelace'])
+        # all of the student's pending items are listed, not only the filtered one
+        self.assertEqual(records[0].pending_items[-2:], ['FERPA', 'Register for Classes'])
+
+    def test_filter_by_high_school(self):
+        records = self.mod.scoped_onboardings(
+            self.staff, str(self.term.id), highschool_ids=[str(self.ada.highschool_id)])
+        self.assertEqual(self._names(records), ['Lovelace'])
+
+    def test_non_ce_user_gets_nothing(self):
+        nobody = _make_user()
+        self.assertEqual(self.mod.scoped_onboardings(nobody, str(self.term.id)), [])
+        self.assertEqual(self.mod.scoped_onboardings(None, str(self.term.id)), [])
+
+    def test_run_writes_csv(self):
+        import csv, io
+        saved = {}
+
+        class FakeStorage:
+            def save(self, path, content):
+                saved['path'], saved['body'] = path, content.read().decode()
+                return path
+
+            def url(self, path):
+                return f'https://files/{path}'
+
+        task = MagicMock(id='t1', created_by=self.staff)
+        form = self.mod.onboarding_pending_items()
+        with patch('cis.backends.storage_backend.PrivateMediaStorage', FakeStorage):
+            url = form.run(task, {'term': [str(self.term.id)], 'pending_items': ['ferpa']})
+        self.assertTrue(url.startswith('https://files/reports/t1/onboarding_pending_items_'))
+        self.assertTrue(saved['path'].endswith('.csv'))
+        rows = list(csv.reader(io.StringIO(saved['body'])))
+        self.assertEqual(rows[0], self.mod.HEADERS)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1][:2], ['Ada', 'Lovelace'])
+        self.assertEqual(rows[1][4], 'Riverside High')
+        self.assertTrue(rows[1][6].endswith('FERPA; Register for Classes'))
+        self.assertRegex(rows[1][7], r'^0 of [23]$')
+
+    def test_datasource_recipients(self):
+        form = self.mod.onboarding_pending_items()
+        self.assertTrue(form.use_as_datasource)
+        columns = set(form.recipient_columns().values())
+        self.assertIn(form.email_column, columns)
+        self.assertTrue(set(form.name_columns) <= columns)
+        rows = form.get_recipients({'term': [str(self.term.id)], 'pending_items': ['classes']})
+        self.assertEqual(sorted(r['LastName'] for r in rows), ['Lovelace', 'Turing'])
+        ada = next(r for r in rows if r['LastName'] == 'Lovelace')
+        self.assertEqual(ada['email'], [self.ada.user.email])
+        self.assertTrue(ada['PendingItems'].endswith('FERPA; Register for Classes'))
+        self.assertEqual(set(form.sample_row()), set(form.recipient_columns()))
+
+    def test_form_defaults_to_active_term_and_lists_stored_steps(self):
+        form = self.mod.onboarding_pending_items()
+        self.assertEqual(form.fields['term'].initial, self.term.pk)
+        keys = [k for k, _ in form.fields['pending_items'].choices]
+        self.assertIn('ferpa', keys)
+        self.assertIn('classes', keys)
+
+    def test_report_is_declared_on_the_app_config(self):
+        from django.apps import apps as django_apps
+        config = django_apps.get_app_config('student_onboarding')
+        names = [r['name'] for r in config.REPORTS]
+        self.assertIn('onboarding_pending_items', names)
+        self.assertTrue(all(r['app'] == config.name for r in config.REPORTS))

@@ -29,11 +29,25 @@ def _register_cron(sender, **kwargs):
     )
 
 
+_REPORTS_BASE = [
+    {
+        'name': 'onboarding_pending_items',
+        'title': 'Onboarding Pending Items',
+        'description': ('Students with an unfinished onboarding who still have '
+                        'the selected items pending. CSV export; can also be '
+                        'used as an announcements datasource.'),
+        'categories': ['Students'],
+        'available_for': ['ce'],
+    },
+]
+
+
 class StudentOnboardingConfig(AppConfig):
     """Production config — used when this package is pip-installed as
     `student_onboarding` (top-level)."""
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'student_onboarding'
+    REPORTS = [{**entry, 'app': 'student_onboarding'} for entry in _REPORTS_BASE]
 
     def ready(self):
         # weak=False is belt-and-suspenders alongside the module-level ref:
@@ -62,3 +76,5 @@ class DevStudentOnboardingConfig(StudentOnboardingConfig):
     `webapp/student_onboarding/`, making the inner package accessible
     as `student_onboarding.student_onboarding`."""
     name = 'student_onboarding.student_onboarding'
+    REPORTS = [{**entry, 'app': 'student_onboarding.student_onboarding'}
+               for entry in _REPORTS_BASE]
